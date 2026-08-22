@@ -41,6 +41,19 @@ const STYLES = {
   none: () => '',
 }
 
+/**
+ * The dot-pulse family the original names in `constants/figures.ts`:
+ * `· ∘ ○ ◎ ◉ ●`. Two dots pulse out of phase, so the pair reads as a heartbeat
+ * rather than two things blinking together.
+ */
+const PULSE = ['·', '∘', '○', '◎', '◉', '●']
+
+export function dotPulse(frame) {
+  const a = PULSE[frame % PULSE.length]
+  const b = PULSE[(frame + 3) % PULSE.length]
+  return `${a} ${b}`
+}
+
 export function loadSpinnerConfig(settings = {}) {
   const sv = settings.spinnerVerbs
   let verbs = Array.isArray(sv?.verbs) ? sv.verbs.filter((v) => typeof v === 'string') : []

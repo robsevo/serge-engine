@@ -24,7 +24,7 @@ import { providerConfig, loadSettings, configDir, VERSION } from './config.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { MODES } from './permissions.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
-import { createSpinner } from './spinner.mjs'
+import { createSpinner, dotPulse } from './spinner.mjs'
 import { renderStatusLine } from './statusline.mjs'
 import { renderStartup, renderHeader } from './startup.mjs'
 import { clawd, MOTION } from './clawd.mjs'
@@ -98,6 +98,23 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     plan: 'plan mode — no changes',
     bypassPermissions: 'bypass permissions',
     fullAccess: 'full access — no prompts',
+  }
+
+  // A pulse on the conversation's own line, so the wait shows up where the
+  // answer will appear rather than only at the bottom of the screen. Rewritten
+  // in place with \r and erased the moment real text arrives.
+  let inlineWidth = 0
+  const clearInline = () => {
+    if (!inlineWidth) return
+    stdout.write(`\r${' '.repeat(inlineWidth)}\r`)
+    inlineWidth = 0
+  }
+  const paintInline = (frame) => {
+    if (!stdout.isTTY || streaming || prompting) return
+    const line = `${C.c}${dotPulse(frame)}${C.x} ${C.y}${spinner.frame()}${C.x}`
+    clearInline()
+    stdout.write(line)
+    inlineWidth = visible(line)
   }
 
   const paintPane = (spinning = false) => {
@@ -177,6 +194,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     onToken: (t) => {
       if (!streaming) {
         spinner.stop()
+        clearInline()
         streaming = true
         atLineStart = true
       }
@@ -244,6 +262,14 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   statusCache = renderStatusLine({
     settings, sessionId: session.sessionId, cwd, model: session.model, usage: session.usage,
   })
+  // Say plainly when a mode is waiving the prompts — an unattended run that
+  // silently stopped asking is the one thing a permission system must not do
+  // quietly.
+  if (session.mode === 'fullAccess' || session.mode === 'bypassPermissions') {
+    stdout.write(`${C.y}▶ ${C.b}auto mode${C.x}${C.y} — no confirmation prompts on this session; `
+      + `inspect risky tool calls.${C.x}\n\n`)
+  }
+
   pane.start()
   paintPane()
 
@@ -478,6 +504,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
         const t = u.prompt + u.completion - before.prompt - before.completion
         spinner.update(t > 0 ? `${fmt(t)} tok` : '')
         tickCount++
+        paintInline(tickCount)
         paintPane(true)
       }, 100)
     } else {
@@ -504,6 +531,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     } finally {
       clearInterval(tick)
       spinner.stop()
+      clearInline()
       paintPane()
       generating = null
       if (!closing) rl.resume()
