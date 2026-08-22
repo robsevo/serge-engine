@@ -8,6 +8,8 @@ import { readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
+export const VERSION = '0.1.0'
+
 export function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.serge')
 }

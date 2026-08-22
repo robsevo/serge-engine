@@ -12,6 +12,7 @@
  * sunset, forest, ocean, monochrome). Colour degrades to plain text off a TTY.
  */
 import { homedir } from 'node:os'
+import { clawd } from './clawd.mjs'
 
 const ESC = '\x1b['
 const RESET = `${ESC}0m`
@@ -175,4 +176,35 @@ export function renderStartup({
   out.push(rule(`╚${'═'.repeat(W - 2)}╝`, GRAD))
   out.push('')
   return out.join('\n')
+}
+
+/**
+ * The identity block that sits under the splash and stays in scrollback: the
+ * mascot beside the name, the routing mode, and where you are.
+ *
+ * Separate from the splash because it answers a different question. The splash
+ * is "is this wired the way I think"; this is "who am I talking to, and where" —
+ * and it is the line you scroll back to when a transcript gets long.
+ */
+export function renderHeader({
+  version = '0.1.0', effort = '', cwd = '', pose = 'default', feetFrame = 0,
+  palette = null, color = true,
+} = {}) {
+  const pl = resolvePalette(palette)
+  const col = color ? rgb : () => ''
+  const rst = color ? RESET : ''
+  const dm = color ? DIM : ''
+  const bold = color ? `${ESC}1m` : ''
+
+  const art = clawd({ pose, feetFrame, color, rgb: pl.gradient[2] })
+  let dir = cwd || process.cwd()
+  try { dir = dir.replace(homedir(), '~') } catch { /* keep it absolute */ }
+
+  const right = [
+    `${bold}${col(...pl.accent)}Serge${rst}${dm}${col(...pl.dim)} v${version}${rst}`,
+    `${dm}${col(...pl.dim)}Hive-mode${effort ? ` with ${effort} effort` : ''}${rst}`,
+    `${dm}${col(...pl.dim)}${dir}${rst}`,
+  ]
+
+  return ['', ...art.map((a, i) => ` ${a}  ${right[i] ?? ''}`), ''].join('\n')
 }

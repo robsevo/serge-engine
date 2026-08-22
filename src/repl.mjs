@@ -20,13 +20,14 @@
 import { createInterface } from 'node:readline'
 import { stdin, stdout } from 'node:process'
 import { createSession } from './loop.mjs'
-import { providerConfig, loadSettings, configDir } from './config.mjs'
+import { providerConfig, loadSettings, configDir, VERSION } from './config.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { MODES } from './permissions.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
 import { createSpinner } from './spinner.mjs'
 import { renderStatusLine } from './statusline.mjs'
-import { renderStartup } from './startup.mjs'
+import { renderStartup, renderHeader } from './startup.mjs'
+import { MODES as ALL_MODES } from './permissions.mjs'
 import { createPane, fit, visible } from './pane.mjs'
 
 const C = stdout.isTTY
@@ -67,31 +68,45 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   const spinner = createSpinner({ settings })
   // Two reserved rows at the bottom: a rule, and a live status line. Output
   // scrolls above them and scrollback is untouched — see pane.mjs.
-  const pane = createPane({ rows: 2 })
+  // Three rows: a rule, the brain's own status line, and the permission mode.
+  const pane = createPane({ rows: 3 })
+  // The status line spawns a process, so it is refreshed per TURN, not per
+  // animation frame — a 100ms spinner tick would fork ten times a second.
+  let statusCache = ''
   let streaming = false
   let paneTimer = null
   // Set while a permission prompt owns the terminal, so the pane's repaint timer
   // does not overwrite the question between asking and the keypress.
   let prompting = false
 
+  const MODE_LABEL = {
+    default: 'ask before edits',
+    acceptEdits: 'accept edits on',
+    plan: 'plan mode — no changes',
+    bypassPermissions: 'bypass permissions',
+    fullAccess: 'full access — no prompts',
+  }
+
   const paintPane = (spinning = false) => {
     if (!pane.enabled || prompting) return
     const cols = stdout.columns || 80
     const u = session.usage
     const tok = u.prompt + u.completion
-    const right = [
-      session.model,
-      session.mode === 'fullAccess' ? 'yolo' : session.mode,
-      `${session.turns} turn${session.turns === 1 ? '' : 's'}`,
-      tok ? `${fmt(tok)} tok` : null,
-    ].filter(Boolean).join(' · ')
+
+    // Row 1: the brain's status line when idle, the spinner while working —
+    // whichever is the more useful thing to be looking at right now.
     const left = spinning
       ? `${C.y}${spinner.frame()}${C.x}`
-      : `${C.g}●${C.x} ${C.dim}ready${C.x}`
-    const gap = Math.max(1, cols - visible(left) - visible(right) - 3)
+      : (statusCache || `${C.dim}${session.model}  ${session.turns} turn(s)${C.x}`)
+    const right = `${C.dim}${tok ? `${fmt(tok)} tok · ` : ''}${session.model}${C.x}`
+    const gap = Math.max(1, cols - visible(left) - visible(right) - 2)
+
+    const mode = session.mode
+    const marker = mode === 'plan' ? `${C.y}⏸${C.x}` : `${C.c}▶▶${C.x}`
     pane.set([
       `${C.dim}${'─'.repeat(Math.max(0, cols))}${C.x}`,
-      ` ${left}${' '.repeat(gap)}${C.dim}${right}${C.x}`,
+      ` ${left}${' '.repeat(gap)}${right}`,
+      ` ${marker} ${C.dim}${MODE_LABEL[mode] ?? mode} (shift+tab to cycle)${C.x}`,
     ])
   }
 
@@ -142,6 +157,15 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       : null,
     color: Boolean(stdout.isTTY),
   }))
+  stdout.write(renderHeader({
+    version: VERSION,
+    effort: settings.effortLevel || '',
+    cwd,
+    color: Boolean(stdout.isTTY),
+  }))
+  statusCache = renderStatusLine({
+    settings, sessionId: session.sessionId, cwd, model: session.model, usage: session.usage,
+  })
   pane.start()
   paintPane()
 
@@ -170,6 +194,19 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   // stdin reaching EOF closes readline without going through /exit, so `closing`
   // alone is not enough to know whether resume/prompt are still legal.
   rl.on('close', () => { closing = true })
+
+  // shift+tab cycles the permission mode, the way serge does. readline does not
+  // surface it, so the raw sequence is intercepted before it reaches the line
+  // editor — otherwise it inserts a literal tab.
+  const CYCLE = ['default', 'acceptEdits', 'plan', 'fullAccess']
+  if (stdin.isTTY) {
+    stdin.on('data', (buf) => {
+      if (String(buf) !== '\x1b[Z' || prompting || generating) return
+      const i = CYCLE.indexOf(session.mode)
+      session.mode = CYCLE[(i + 1) % CYCLE.length]
+      paintPane()
+    })
+  }
 
   // readline's own SIGINT handling would kill the process. Take it over so a
   // Ctrl+C can mean "stop this turn" without meaning "throw away the session".
@@ -385,6 +422,9 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
 
     const u = session.usage
     const spent = (u.prompt + u.completion) - (before.prompt + before.completion)
+    statusCache = renderStatusLine({
+      settings, sessionId: session.sessionId, cwd, model: session.model, usage: u,
+    })
     if (pane.enabled) {
       // The pane already carries seat, mode, turns and totals; repeating them
       // after every turn is noise. Only the per-turn cost is new.

@@ -6,13 +6,11 @@
  * yet and says so rather than pretending — see README milestones.
  */
 import { runSession } from './loop.mjs'
-import { providerConfig, loadSettings, configDir } from './config.mjs'
+import { providerConfig, loadSettings, configDir, VERSION } from './config.mjs'
 import { MODES } from './permissions.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { listSessions, findSession, renderSessions } from './sessions.mjs'
 import { startMcp } from './mcp.mjs'
-
-export const VERSION = '0.1.0'
 
 export async function main(argv = process.argv.slice(2)) {
   const has = (...f) => f.some((x) => argv.includes(x))
