@@ -17,17 +17,66 @@
  */
 import { homedir } from 'node:os'
 
-/** Block wordmark. Five rows so it reads at a glance without dominating. */
-const WORDMARK = [
-  '███████ ███████ ██████   ██████  ███████',
-  '██      ██      ██   ██ ██       ██     ',
-  '███████ █████   ██████  ██   ███ █████  ',
-  '     ██ ██      ██   ██ ██    ██ ██     ',
-  '███████ ███████ ██   ██  ██████  ███████',
-]
+/**
+ * The wordmark: a 5x5 bitmap per letter, drawn twice — a light face and a darker
+ * copy offset down-right for the drop shadow. Doing it from a bitmap rather than
+ * pasted ASCII keeps the shadow exactly one cell off on both axes, which is what
+ * makes it read as depth instead of as a smudge.
+ */
+const GLYPHS = {
+  S: ['11111', '10000', '11111', '00001', '11111'],
+  E: ['11111', '10000', '11110', '10000', '11111'],
+  R: ['11110', '10001', '11110', '10010', '10001'],
+  G: ['11111', '10000', '10011', '10001', '11111'],
+}
 
-/** Blue gradient, lightest at the top — 256-colour, which every modern term has. */
-const GRADIENT = [39, 33, 32, 26, 25]
+const CELL = 2            // each bit is this many columns wide
+const GAP = 1             // blank cells between letters
+const FACE = 75           // light blue
+const SHADOW = 24         // the darker blue behind it
+
+function wordmark(word, color) {
+  const rows = 5
+
+  // Expand the bitmap to CHARACTER space first. The shadow is then offset by one
+  // character, not one bit — offsetting in bit space moves it CELL columns and
+  // it lands inside the next stroke instead of behind this one.
+  const grid = []
+  for (let r = 0; r < rows; r++) grid.push([])
+  let x = 0
+  for (const ch of word) {
+    const g = GLYPHS[ch]
+    if (!g) { x += 2 * CELL; continue }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < g[r].length; c++) {
+        if (g[r][c] !== '1') continue
+        for (let k = 0; k < CELL; k++) grid[r][x + c * CELL + k] = 1
+      }
+    }
+    x += g[0].length * CELL + GAP * CELL
+  }
+  const width = x + 1
+
+  const isFace = (r, c) => Boolean(grid[r]?.[c])
+  const isShadow = (r, c) => !isFace(r, c) && Boolean(grid[r - 1]?.[c - 1])
+
+  const out = []
+  for (let r = 0; r <= rows; r++) {
+    let line = ''
+    let pen = 'none'
+    for (let c = 0; c <= width; c++) {
+      const want = isFace(r, c) ? 'face' : (isShadow(r, c) ? 'shadow' : 'none')
+      if (want !== pen && color) {
+        line += want === 'none' ? '\x1b[0m'
+          : `\x1b[38;5;${want === 'face' ? FACE : SHADOW}m`
+      }
+      pen = want
+      line += want === 'none' ? ' ' : '█'
+    }
+    out.push(line + (color ? '\x1b[0m' : ''))
+  }
+  return out
+}
 
 /**
  * Seat roles serge's own startup screen shows. Names are the brain's, not ours:
@@ -66,34 +115,40 @@ export function renderStartup({
   commands = 0, skills = 0, agents = 0, mcp = '', resumed = null,
   color = true, width = 0,
 } = {}) {
+  // Palette lifted from the reference: sage labels, warm identity, blue frame.
   const c = color
-    ? { dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', y: '\x1b[33m', cy: '\x1b[36m',
-        x: '\x1b[0m', grad: (i) => `\x1b[38;5;${GRADIENT[i]}m` }
-    : { dim: '', b: '', g: '', y: '', cy: '', x: '', grad: () => '' }
+    ? { dim: '\x1b[2m', b: '\x1b[1m', x: '\x1b[0m',
+        label: '\x1b[38;5;108m',     // sage — the key column
+        val: '\x1b[38;5;252m',       // near-white — the values
+        warm: '\x1b[38;5;180m',      // tan — who is answering
+        frame: '\x1b[38;5;68m',      // blue — the box
+        ok: '\x1b[38;5;114m',        // green — the ready dot
+        hint: '\x1b[38;5;75m' }      // light blue — /help
+    : { dim: '', b: '', x: '', label: '', val: '', warm: '', frame: '', ok: '', hint: '' }
 
   const out = []
   out.push('')
-  WORDMARK.forEach((row, i) => out.push(`  ${c.grad(i)}${row}${c.x}`))
+  for (const row of wordmark('SERGE', color)) out.push(`  ${row}`)
   out.push('')
 
   // ── panel rows ────────────────────────────────────────────────────────────
   const rows = []
   const add = (label, value) => rows.push([label, value])
 
-  add('Provider', `${c.cy}Serge${c.x} ${c.dim}·${c.x} ${c.cy}Hive${c.x}`)
+  add('Provider', `${c.warm}Serge${c.x} ${c.dim}·${c.x} ${c.warm}Hive${c.x}`)
 
   const seatRows = ROLES.map(([role, seat]) => {
     const hit = seats?.get?.(seat)
     const pretty = prettyModel(hit?.model) || seat
-    return `${c.b}${role}${c.x} ${c.dim}·${c.x} ${pretty}`
+    return `${c.val}${role}${c.x} ${c.dim}·${c.x} ${c.val}${pretty}${c.x}`
   })
   add('Models', seatRows[0])
   for (const r of seatRows.slice(1)) add('', r)
 
   const host = baseUrl.replace(/^https?:\/\//, '').replace(/\/v1$/, '')
   const local = /^(localhost|127\.0\.0\.1)/.test(host)
-  add('Endpoint', `${local ? 'local' : host} ${c.dim}→${c.x} cloud`)
-  add('Dir', shortenPath(cwd))
+  add('Endpoint', `${c.val}${local ? 'local' : host} ${c.dim}→${c.x} ${c.val}cloud${c.x}`)
+  add('Dir', `${c.val}${shortenPath(cwd)}${c.x}`)
 
   const brain = [
     commands && `${commands} cmd`,
@@ -103,14 +158,14 @@ export function renderStartup({
   ].filter(Boolean).join(`${c.dim} · ${c.x}`)
   // NOT "Brain" — that is already a seat role two rows up, and repeating it
   // reads as though the panel is describing the same thing twice.
-  if (brain) add('Loaded', brain)
-  if (resumed) add('Session', `${c.g}${resumed}${c.x}`)
+  if (brain) add('Loaded', `${c.val}${brain}${c.x}`)
+  if (resumed) add('Session', `${c.ok}${resumed}${c.x}`)
 
   // ── frame ─────────────────────────────────────────────────────────────────
   const LABEL_W = 10
-  const bodies = rows.map(([l, v]) => `  ${c.dim}${l.padEnd(LABEL_W)}${c.x}${v}`)
-  const status = `  ${c.g}●${c.x} ${mode === 'fullAccess' ? `${c.y}yolo${c.x} ` : ''}`
-    + `${c.dim}ready${c.x}     ${c.dim}type${c.x} ${c.cy}/help${c.x} ${c.dim}to begin${c.x}`
+  const bodies = rows.map(([l, v]) => `  ${c.label}${l.padEnd(LABEL_W)}${c.x}${v}`)
+  const status = `  ${c.ok}●${c.x} ${mode === 'fullAccess' ? `${c.warm}yolo${c.x} ` : ''}`
+    + `${c.val}ready${c.x}     ${c.dim}type${c.x} ${c.hint}/help${c.x} ${c.dim}to begin${c.x}`
 
   const term = width || process.stdout.columns || 80
   const inner = Math.min(
@@ -127,13 +182,14 @@ export function renderStartup({
     const head = Math.max(14, Math.floor((w - over) / 2))
     return `${line.slice(0, head)}…${line.slice(head + over)}`
   }
-  const bar = (l, m, r) => `  ${c.dim}${l}${'─'.repeat(inner)}${r}${c.x}`.replace('─'.repeat(inner) + r, '─'.repeat(inner) + r)
+  const bar = (l, r) => `  ${c.frame}${l}${'─'.repeat(inner)}${r}${c.x}`
+  const row = (body) => `  ${c.frame}│${c.x}${pad(body)}${c.frame}│${c.x}`
 
-  out.push(bar('┌', '', '┐'))
-  for (const b of bodies) out.push(`  ${c.dim}│${c.x}${pad(b)}${c.dim}│${c.x}`)
-  out.push(bar('├', '', '┤'))
-  out.push(`  ${c.dim}│${c.x}${pad(status)}${c.dim}│${c.x}`)
-  out.push(bar('└', '', '┘'))
+  out.push(bar('┌', '┐'))
+  for (const b of bodies) out.push(row(b))
+  out.push(bar('├', '┤'))
+  out.push(row(status))
+  out.push(bar('└', '┘'))
   out.push('')
   return out.join('\n')
 }

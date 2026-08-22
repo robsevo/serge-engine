@@ -131,8 +131,7 @@ git clone https://github.com/robsevo/serge-engine
 ( cd serge-brain  && ./install.sh --engine ../serge-engine )
 ```
 
-`npm run build` copies `src/` to `dist/` — there is no bundler and there are **no
-dependencies**, so it is instant and needs no network. The brain's installer then
+`npm run build` copies `src/` to `dist/` — instant, and no network. The brain's installer then
 verifies the engine answers `--version`, resolves hook paths into
 `~/.serge/settings.json`, and stops before writing a key or starting a service.
 
@@ -257,18 +256,14 @@ It is in src/auth/token.js — validateToken(), called from src/api/route.js:2.
  ⠹ (=^·ω·^=) Triangulating… 4s · 3.9k tok    local-coder · yolo · 3 turns · 21k tok
 ```
 
-A full-screen TUI is usually built one of two ways, and both charge for it. The
-**alternate screen buffer** gives you the whole screen and takes your scrollback
-with it — for an agent that prints code and diffs, losing scrollback is losing
-the work. A **rendering framework** gives you panes and takes a dependency tree
-into a process that reads your filesystem and runs shell commands.
+The obvious way to do this is the alternate screen buffer, which gives you the
+whole screen and takes your scrollback with it. For an agent that prints code and
+diffs, losing scrollback is losing the work.
 
-There is a third mechanism older than both. `DECSTBM` — `ESC [ top;bottom r` —
-tells the terminal to scroll only part of the screen. Set it to everything but
-the last two rows and those rows stop scrolling: output flows above them,
-**scrollback keeps working normally**, and the reserved rows are ours to paint.
-No alternate screen, no dependency, and it is in every terminal that speaks
-VT100.
+`DECSTBM` — `ESC [ top;bottom r` — does it without that. It tells the terminal to
+scroll only part of the screen: set the region to everything but the last two
+rows and those rows stop scrolling, while everything above them behaves exactly
+as before, **scrollback included**.
 
 What that costs instead is care, all of it tested:
 
@@ -403,10 +398,6 @@ execution is confirmed by a **sentinel file** the tool was told to create, not b
 the tool's own report.
 
 ## 7. Design notes
-
-**No dependencies.** `package.json` has an empty `dependencies` block and the
-build is a file copy. An agent runtime that can read your filesystem and run
-shell commands is the last place to inherit a transitive supply chain.
 
 **The router does the routing.** The engine sends `model: <seat>` and reads the
 stream. It has no fallback table, no retry-across-seats logic, no opinion about

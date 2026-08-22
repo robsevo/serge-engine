@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Build = copy src/ to dist/. No bundler, no dependencies.
+ * Build = copy src/ to dist/.
  *
  * install.sh only requires that `node dist/cli.mjs --version` answers, and the
- * source is already plain ESM that Node runs directly. A bundler here would buy
- * nothing and add a supply chain.
+ * source is already plain ESM that Node runs directly, so there is nothing to
+ * bundle.
  */
 import { cpSync, rmSync, mkdirSync, chmodSync } from 'node:fs'
 import { join, dirname } from 'node:path'

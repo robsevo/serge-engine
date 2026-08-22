@@ -29,9 +29,9 @@ import { join } from 'node:path'
 import { configDir } from './config.mjs'
 
 /**
- * Minimal YAML scan for the two keys that matter. Not a YAML parser — the file
- * is 50KB of comments and nested provider config, and a real parser would be a
- * dependency for a feature that only needs the seat names and their targets.
+ * Minimal scan for the two keys that matter. Not a YAML parser: the file is 50KB
+ * of comments and nested provider config, and all this needs is the seat names
+ * and what each points at.
  */
 export function loadSeats(path = null) {
   const p = path || join(configDir(), 'litellm.yaml')

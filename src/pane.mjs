@@ -4,18 +4,14 @@
  * WHAT THIS BUYS, AND WHAT IT DOES NOT COST. A full-screen TUI is normally built
  * one of two ways, and both charge for it:
  *
- *   alternate screen buffer   gives you the whole screen, and takes your
- *                             scrollback with it. For an agent that prints code
- *                             and diffs, losing scrollback is losing the work.
- *   a rendering framework     gives you panes, and takes a dependency tree into
- *                             a process that reads your filesystem and runs
- *                             shell commands.
+ * The obvious way is the alternate screen buffer, which gives you the whole
+ * screen and takes your scrollback with it. For an agent that prints code and
+ * diffs, losing scrollback is losing the work.
  *
- * There is a third mechanism older than both. DECSTBM (`ESC [ top;bottom r`)
- * tells the terminal to scroll only part of the screen. Set it to everything but
- * the last N rows and those rows stop scrolling: output flows above them,
- * scrollback keeps working normally, and the reserved rows are ours to paint.
- * No alt-screen, no dependency, and it is in every terminal that speaks VT100.
+ * DECSTBM (`ESC [ top;bottom r`) does it without that. It tells the terminal to
+ * scroll only part of the screen: set the region to everything but the last N
+ * rows and those rows stop scrolling, while everything above them behaves
+ * exactly as before — scrollback included.
  *
  * THE THINGS THAT GO WRONG, and what is done about each:
  *   - cursor drift: painting the pane moves the cursor, which would land the

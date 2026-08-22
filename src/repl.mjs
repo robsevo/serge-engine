@@ -4,13 +4,9 @@
  * A conversation that keeps going: history persists across prompts, the same
  * hooks fire on every turn, and the loop only ends when you end it.
  *
- * WHY `readline` AND NOT A TUI FRAMEWORK. A full-screen TUI means a rendering
- * library, which means a dependency tree in a process that can read your
- * filesystem and run shell commands. Node's `readline` is in the standard
- * library and gives the things that actually matter in a REPL: line editing,
- * history, tab completion, and correct terminal signal handling. What it does
- * not give — panes, mouse, a status bar that redraws — is not worth a supply
- * chain.
+ * Built on `readline`, which handles the things that actually matter in a REPL:
+ * line editing, history, tab completion, and correct terminal signal handling.
+ * The pinned status pane is in pane.mjs.
  *
  * THE THREE INTERRUPTS, and why they differ:
  *   Ctrl+C while generating  aborts THIS turn, keeps the session. The reply so

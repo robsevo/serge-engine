@@ -17,10 +17,8 @@
  * mean the model never knows they exist. The index is the middle: one line each,
  * enough to decide, and the body is one tool call away.
  *
- * Frontmatter is parsed with a deliberately small reader rather than a YAML
- * dependency — these files use flat `key: value` pairs, and a parser that
- * handles anchors and multi-line flow scalars would be a supply chain for
- * nothing.
+ * Frontmatter is read by a small parser: these files are flat `key: value`
+ * pairs, so anchors and flow scalars never come up.
  */
 import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { join, basename } from 'node:path'
