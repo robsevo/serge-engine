@@ -214,11 +214,30 @@ the brain's hooks on every one, and only ends when you end it.
 | `/agents` | the named subagents `Task` can spawn, and their seats |
 | `/mcp` | MCP servers and their tool counts |
 | `/cost` | turns so far, and the transcript path |
+| `/resume` | sessions you can pick up again |
 | `/exit` | leave |
 
 Plus every command the brain authors in `commands/*.md` — `/recap`, `/plans`,
-`/learn` and the rest — which expand to their authored prompt. Tab completion
-lists them all.
+`/learn` and the rest — which expand to their authored prompt.
+
+Press `/` and the menu opens under the input with all of them, built-ins first:
+
+```
+❯ /mo
+ ❯ /model    Show the current seat, or move to another
+   /mode     Show or set the permission mode
+```
+
+It filters as you type, `↑↓` moves, `tab` or `enter` picks, and it closes on
+the first space — past that you are writing the command's argument, so there is
+nothing left to complete.
+
+Both front-ends read one catalogue and one dispatcher (`src/commands.mjs`), so
+a command cannot be offered in one and missing in the other. `dispatch()`
+returns data rather than writing to stdout, which is what lets a React renderer
+and a readline loop share it. The test suite asserts the property this exists
+for: **every name the menu offers actually dispatches** — an offered name that
+answers "unknown command" is worse than not offering it.
 
 **Resuming and branching.** A session survives the process, and can be split:
 
