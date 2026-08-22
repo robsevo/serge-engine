@@ -1,0 +1,21 @@
+# ─── Build output ───────────────────────────────────────────────────────────
+dist/
+*.tsbuildinfo
+
+# ─── Dependencies ───────────────────────────────────────────────────────────
+node_modules/
+
+# ─── Conformance run artifacts ──────────────────────────────────────────────
+# Each run creates a throwaway SERGE_HOME and a probe log. The generated
+# contract in docs/ IS committed — it is the deliverable.
+tests/conformance/.runs/
+
+# ─── Secrets ────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# ─── Generated at install time ───────────────────────────────────────────────
+package-lock.json
