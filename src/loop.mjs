@@ -67,7 +67,7 @@ function boundResult(name, content) {
  * the turn, which is what makes the second prompt aware of the first.
  */
 export function createSession({
-  cwd, model, onToken, onNotice, onTool, onAsk, permissionMode = 'default',
+  cwd, model, onToken, onNotice, onTool, onToolResult, onAsk, permissionMode = 'default',
   mcp = null, resumeFrom = null, forkParent = null, loadBrain = true,
 }) {
   const settings = loadSettings()
@@ -262,6 +262,7 @@ export function createSession({
       const pre = runHooks('PreToolUse', payload, call.name, settings)
       if (pre.blocked) {
         results.push({ id: call.id, content: `Blocked by PreToolUse hook: ${pre.reason}`, isError: true })
+        onToolResult?.(call.name, pre.reason, true)
         onNotice?.(`denied ${call.name}: ${pre.reason}`, 'user')
         runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: pre.reason },
           'permission_prompt', settings)
@@ -290,6 +291,7 @@ export function createSession({
         // just answered, and telling them how to edit settings.json is noise.
         const detail = verdict.reason + (!onAsk && verdict.hint ? ` ${verdict.hint}` : '')
         results.push({ id: call.id, content: `Permission denied: ${detail}`, isError: true })
+        onToolResult?.(call.name, verdict.reason, true)
         onNotice?.(`denied ${call.name}: ${detail}`, 'user')
         runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: verdict.reason },
           'permission_prompt', settings)
@@ -324,6 +326,7 @@ export function createSession({
         content = `${out.content}\n\n${post.context.join('\n')}`
       }
       results.push({ id: call.id, content: boundResult(call.name, content), isError })
+      onToolResult?.(call.name, content, isError)
     }
 
     transcript.toolResults(results)

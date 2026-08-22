@@ -85,6 +85,8 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   const shortCwd = cwd.startsWith(homedir()) ? `~${cwd.slice(homedir().length)}` : cwd
   let streaming = false
   let paneTimer = null
+  let atLineStart = true
+  let firstLine = true
   // Set while a permission prompt owns the terminal, so the pane's repaint timer
   // does not overwrite the question between asking and the keypress.
   let prompting = false
@@ -163,9 +165,25 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     mcp,
     resumeFrom,
     forkParent,
+    // Assistant text is marked and indented so a long reply is visibly one
+    // block rather than running into the next prompt. The marker is written on
+    // the first token of a turn, and again after every newline, because the text
+    // arrives a fragment at a time and there is no "message start" event.
     onToken: (t) => {
-      if (!streaming) { spinner.stop(); streaming = true }
-      stdout.write(t)
+      if (!streaming) {
+        spinner.stop()
+        streaming = true
+        atLineStart = true
+      }
+      for (const ch of t) {
+        if (atLineStart) {
+          stdout.write(firstLine ? `\n  ${C.c}※${C.x} ` : '    ')
+          firstLine = false
+          atLineStart = false
+        }
+        stdout.write(ch)
+        if (ch === '\n') atLineStart = true
+      }
     },
     // Notices tagged 'model' are gate feedback addressed to the agent, not to
     // the reader — printing them pastes a paragraph of instructions into the
@@ -187,6 +205,17 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       // every tool call is worse than a plain one.
       say(`  ${C.c}●${C.x} ${C.b}${name}${C.x}`
         + `${arg ? `  ${C.dim}${String(arg).replace(/\s+/g, ' ').slice(0, 68)}${C.x}` : ''}\n`)
+    },
+    // One line under each call. A call with nothing under it reads as though it
+    // never returned; the full output is in the transcript, so this only has to
+    // say what happened.
+    onToolResult: (name, content, isError) => {
+      const text = String(content ?? '').trim()
+      const lines = text ? text.split('\n').filter((l) => l.trim()) : []
+      const head = (lines[0] ?? '(no output)').replace(/\s+/g, ' ').slice(0, 66)
+      const more = lines.length > 1 ? ` ${C.dim}+${lines.length - 1} line${lines.length === 2 ? '' : 's'}${C.x}` : ''
+      const mark = isError ? `${C.r}└${C.x}` : `${C.dim}└${C.x}`
+      say(`  ${mark} ${C.dim}${head}${C.x}${more}\n`)
     },
     onAsk: askPermission,
   })
@@ -426,6 +455,8 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     // would otherwise interleave with the output and land in the next prompt.
     rl.pause()
     streaming = false
+    atLineStart = true
+    firstLine = true
     const before = session.usage
     let tick
     if (pane.enabled) {
@@ -453,7 +484,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       } else if (res.exhausted) {
         stdout.write(`\n${C.y}  · turn budget exhausted without a final answer${C.x}\n`)
       }
-      stdout.write('\n')
+      if (streaming) stdout.write('\n')
     } catch (e) {
       const aborted = e?.name === 'AbortError' || generating.signal.aborted
       if (!aborted) stdout.write(`\n${C.r}  error: ${e?.message ?? e}${C.x}\n`)
