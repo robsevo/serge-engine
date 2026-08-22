@@ -23,6 +23,7 @@ import { loadAgents } from '../src/brain.mjs'
 import { makeTaskTool } from '../src/tools/task.mjs'
 import { loadSpinnerConfig, createSpinner } from '../src/spinner.mjs'
 import { renderStartup } from '../src/startup.mjs'
+import { createPane, fit, visible } from '../src/pane.mjs'
 
 let pass = 0
 const failures = []
@@ -356,6 +357,44 @@ try {
   check('fork: a self-referential parent does not hang', replay(loopTx).turns === 1,
         'a malformed transcript must not take the CLI down with it')
 
+  // ── status pane ──────────────────────────────────────────────────────────
+  check('pane: fit pads a short line to exact width', fit('abc', 20).length === 20)
+  check('pane: fit elides the MIDDLE of a long one',
+        fit('/very/deep/path/that/keeps/going', 20).length === 20
+        && fit('/very/deep/path/that/keeps/going', 20).includes('…'),
+        'both ends of a path are useful; truncating the tail loses where you are')
+  check('pane: visible ignores SGR', visible('\x1b[2mabc\x1b[0m') === 3,
+        'padding on raw length would misalign every coloured row')
+
+  const paneOut = []
+  const fakeTty = {
+    isTTY: true, columns: 80, rows: 24,
+    write: (x) => paneOut.push(x), on() {}, off() {},
+  }
+  const pn = createPane({ rows: 2, stream: fakeTty })
+  pn.start()
+  check('pane: narrows the scroll region on start',
+        paneOut.join('').includes('\x1b[1;22r'),
+        'DECSTBM is what reserves the rows without an alternate screen buffer')
+  pn.set(['rule', 'status'])
+  const painted = paneOut.join('')
+  check('pane: saves and restores the cursor around a paint',
+        painted.includes('\x1b7') && painted.includes('\x1b8'),
+        'without this the next output lands wherever the pane left the cursor')
+  paneOut.length = 0
+  pn.stop()
+  check('pane: RESETS the scroll region on stop', paneOut.join('').includes('\x1b[r'),
+        'leaving it narrowed hands the user a broken shell')
+
+  // A terminal too short to divide must decline rather than squeeze the
+  // conversation into two lines.
+  const shortOut = []
+  const shortTty = { isTTY: true, columns: 80, rows: 6, write: (x) => shortOut.push(x), on() {}, off() {} }
+  const shortPane = createPane({ rows: 2, stream: shortTty })
+  shortPane.start()
+  check('pane: disables itself on a short terminal', !shortPane.enabled)
+  shortPane.stop()
+
   // ── unknown tool ──────────────────────────────────────────────────────────
   r = await runTool('NoSuchTool', {}, ctx)
   check('unknown tool is reported, not thrown', r.isError && /Unknown tool/.test(r.content))
@@ -368,7 +407,7 @@ if (process.argv.includes('--self-test')) {
   // Every assertion above is a real observation, so a suite that reports success
   // regardless would be worthless. This asserts the suite HAS teeth: it must
   // have exercised a meaningful number of checks and be capable of failing.
-  const teeth = total >= 70
+  const teeth = total >= 78
   console.log(teeth
     ? `\n  SELF-TEST PASSED — ${total} independent assertions, each checked against observed state.`
     : `\n  SELF-TEST FAILED — only ${total} assertions; this suite is not covering the tools.`)

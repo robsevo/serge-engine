@@ -84,6 +84,31 @@ export function createSpinner({ settings = {}, stream = stderr, intervalMs = 100
   return {
     get active() { return timer !== null },
 
+    /**
+     * The current frame as a string, for a caller that owns the screen.
+     *
+     * When a status pane is present the spinner must not write anywhere itself —
+     * two things painting the same terminal race, and the loser leaves half a
+     * line behind. The pane asks for a frame and places it.
+     */
+    frame(detailOverride = null) {
+      const secs = Math.floor((Date.now() - startedAt) / 1000)
+      if (secs > 0 && secs % 7 === 0 && frame % 10 === 0) {
+        verb = verbs[Math.floor(Math.random() * verbs.length)]
+      }
+      const d = detailOverride ?? detail
+      frame++
+      return `${render(frame)} ${verb}… ${secs}s${d ? ` · ${d}` : ''}`
+    },
+
+    /** Advance state without drawing — for pane-driven rendering. */
+    begin(initialDetail = '') {
+      startedAt = Date.now()
+      frame = 0
+      detail = initialDetail
+      verb = verbs[Math.floor(Math.random() * verbs.length)]
+    },
+
     start(initialDetail = '') {
       if (timer || !live) { startedAt = Date.now(); detail = initialDetail; return }
       startedAt = Date.now()

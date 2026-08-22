@@ -31,6 +31,7 @@ import { loadCommands, expandCommand } from './brain.mjs'
 import { createSpinner } from './spinner.mjs'
 import { renderStatusLine } from './statusline.mjs'
 import { renderStartup } from './startup.mjs'
+import { createPane, fit, visible } from './pane.mjs'
 
 const C = stdout.isTTY
   ? { dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m',
@@ -68,15 +69,40 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   const commands = loadCommands()
 
   const spinner = createSpinner({ settings })
+  // Two reserved rows at the bottom: a rule, and a live status line. Output
+  // scrolls above them and scrollback is untouched — see pane.mjs.
+  const pane = createPane({ rows: 2 })
   let streaming = false
+  let paneTimer = null
+
+  const paintPane = (spinning = false) => {
+    if (!pane.enabled) return
+    const cols = stdout.columns || 80
+    const u = session.usage
+    const tok = u.prompt + u.completion
+    const right = [
+      session.model,
+      session.mode === 'fullAccess' ? 'yolo' : session.mode,
+      `${session.turns} turn${session.turns === 1 ? '' : 's'}`,
+      tok ? `${fmt(tok)} tok` : null,
+    ].filter(Boolean).join(' · ')
+    const left = spinning
+      ? `${C.y}${spinner.frame()}${C.x}`
+      : `${C.g}●${C.x} ${C.dim}ready${C.x}`
+    const gap = Math.max(1, cols - visible(left) - visible(right) - 3)
+    pane.set([
+      `${C.dim}${'─'.repeat(Math.max(0, cols))}${C.x}`,
+      ` ${left}${' '.repeat(gap)}${C.dim}${right}${C.x}`,
+    ])
+  }
 
   // The spinner owns the screen until the first token, then gets out of the way.
   // Notices and tool lines have to clear it too, or they print into its row.
+  // With a pane the spinner never touches the screen, so notices and tool lines
+  // just print — the pane repaints itself on its own timer.
   const say = (line) => {
-    const wasActive = spinner.active
-    if (wasActive) spinner.stop()
+    if (!pane.enabled && spinner.active) { spinner.stop(); stdout.write(line); spinner.start(); return }
     stdout.write(line)
-    if (wasActive && !streaming) spinner.start()
   }
 
   const session = createSession({
@@ -114,6 +140,8 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       : null,
     color: Boolean(stdout.isTTY),
   }))
+  pane.start()
+  paintPane()
 
   const rl = createInterface({
     input: stdin,
@@ -262,12 +290,23 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     rl.pause()
     streaming = false
     const before = session.usage
-    spinner.start()
-    const tick = setInterval(() => {
-      const u = session.usage
-      const t = u.prompt + u.completion - before.prompt - before.completion
-      if (t > 0) spinner.update(`${fmt(t)} tok`)
-    }, 1000)
+    let tick
+    if (pane.enabled) {
+      spinner.begin()
+      tick = setInterval(() => {
+        const u = session.usage
+        const t = u.prompt + u.completion - before.prompt - before.completion
+        spinner.update(t > 0 ? `${fmt(t)} tok` : '')
+        paintPane(true)
+      }, 100)
+    } else {
+      spinner.start()
+      tick = setInterval(() => {
+        const u = session.usage
+        const t = u.prompt + u.completion - before.prompt - before.completion
+        if (t > 0) spinner.update(`${fmt(t)} tok`)
+      }, 1000)
+    }
     tick.unref?.()
     try {
       const res = await session.send(toSend, { signal: generating.signal })
@@ -284,20 +323,30 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     } finally {
       clearInterval(tick)
       spinner.stop()
+      paintPane()
       generating = null
       if (!closing) rl.resume()
     }
 
-    const status = renderStatusLine({
-      settings, sessionId: session.sessionId, cwd, model: session.model, usage: session.usage,
-    })
     const u = session.usage
     const spent = (u.prompt + u.completion) - (before.prompt + before.completion)
-    stdout.write(`${C.dim}  ${status || `${session.model}  ${session.turns} turn(s)`}`
-      + `${spent > 0 ? `  +${fmt(spent)} tok` : ''}  ${spinner.elapsed().toFixed(1)}s${C.x}\n\n`)
+    if (pane.enabled) {
+      // The pane already carries seat, mode, turns and totals; repeating them
+      // after every turn is noise. Only the per-turn cost is new.
+      stdout.write(`${C.dim}  ${spent > 0 ? `+${fmt(spent)} tok · ` : ''}`
+        + `${spinner.elapsed().toFixed(1)}s${C.x}\n\n`)
+    } else {
+      const status = renderStatusLine({
+        settings, sessionId: session.sessionId, cwd, model: session.model, usage: session.usage,
+      })
+      stdout.write(`${C.dim}  ${status || `${session.model}  ${session.turns} turn(s)`}`
+        + `${spent > 0 ? `  +${fmt(spent)} tok` : ''}  ${spinner.elapsed().toFixed(1)}s${C.x}\n\n`)
+    }
+    paintPane()
     prompt()
   }
 
+  pane.stop()
   stdout.write(`${C.dim}  session ${session.sessionId.slice(0, 8)} · ${session.turns} turn(s)\n`
     + `  ${session.transcriptPath}${C.x}\n`)
   return 0

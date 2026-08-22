@@ -245,11 +245,43 @@ Three interrupts, deliberately different:
   should not discard a long conversation.
 - **`Ctrl+D`** exits, because that is what EOF means.
 
-It is a line-based REPL built on Node's `readline`, not a full-screen TUI. That
-is a choice: a TUI framework is a dependency tree in a process that can read your
-filesystem and run shell commands, and `readline` already gives line editing,
-history and correct signal handling. Panes and mouse support are not worth the
-supply chain.
+### The pane, and why it costs nothing
+
+The bottom two rows are pinned. Output scrolls above them; they stay put:
+
+```
+❯ where is token validation handled?
+  ⚒ Explore  where is token validation handled
+It is in src/auth/token.js — validateToken(), called from src/api/route.js:2.
+────────────────────────────────────────────────────────────────────────────
+ ⠹ (=^·ω·^=) Triangulating… 4s · 3.9k tok    local-coder · yolo · 3 turns · 21k tok
+```
+
+A full-screen TUI is usually built one of two ways, and both charge for it. The
+**alternate screen buffer** gives you the whole screen and takes your scrollback
+with it — for an agent that prints code and diffs, losing scrollback is losing
+the work. A **rendering framework** gives you panes and takes a dependency tree
+into a process that reads your filesystem and runs shell commands.
+
+There is a third mechanism older than both. `DECSTBM` — `ESC [ top;bottom r` —
+tells the terminal to scroll only part of the screen. Set it to everything but
+the last two rows and those rows stop scrolling: output flows above them,
+**scrollback keeps working normally**, and the reserved rows are ours to paint.
+No alternate screen, no dependency, and it is in every terminal that speaks
+VT100.
+
+What that costs instead is care, all of it tested:
+
+| failure | handled |
+|---|---|
+| cursor drift after a paint | every paint wrapped in `ESC 7` / `ESC 8` |
+| resize invalidating the region | `SIGWINCH`, debounced — a drag emits a burst |
+| terminal too short to divide | below 12 rows the pane declines rather than squeezing |
+| **crash leaving a narrowed region** | teardown runs from `exit` and `SIGTERM`, not just the happy path |
+
+That last row is the one that matters: a broken scroll region outlives the
+process and hands the user a shell that scrolls wrong. Verified on all three
+paths — clean exit, uncaught throw, and `SIGTERM`.
 
 ## 4. What works, and what does not
 
@@ -307,10 +339,14 @@ supply chain.
   transcript that points back at the original. The parent is never appended to,
   so it can be forked again, and replay walks the chain rather than copying it
 
+- **a pinned status pane** — the last two rows are reserved and never scroll:
+  a rule, then live seat, mode, turn count, token total, and the spinner while a
+  turn runs
+
 **Does not, stated plainly so nobody discovers it later:**
 
-- the session is a line-based REPL with a boxed startup panel, a spinner and a
-  status line — not a full-screen TUI with panes or mouse support
+- no mouse support, and no multi-column layout — one scrolling region and one
+  pinned pane, not a window manager
 - no OAuth for remote MCP servers — bearer tokens via `headers` only
 
 ## 5. The contract
