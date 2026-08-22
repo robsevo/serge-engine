@@ -177,7 +177,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       }
       for (const ch of t) {
         if (atLineStart) {
-          stdout.write(firstLine ? `\n  ${C.c}※${C.x} ` : '    ')
+          stdout.write(firstLine ? `\n${C.b}●${C.x} ` : '  ')
           firstLine = false
           atLineStart = false
         }
@@ -192,19 +192,18 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     onNotice: (m, kind = 'user') => {
       if (kind === 'model') {
         const what = String(m).split(':')[0]
-        say(`  ${C.dim}↺ ${what} — sent back${C.x}\n`)
+        say(`  ${C.dim}└  ${what} — sent back${C.x}\n`)
         return
       }
-      say(`  ${C.dim}└ ${m}${C.x}\n`)
+      say(`  ${C.dim}└  ${m}${C.x}\n`)
     },
     onTool: (name, input) => {
       const arg = input?.command || input?.file_path || input?.pattern
         || input?.query || input?.name || ''
-      // `●` rather than a pictograph: glyphs outside the common ranges fall back
-      // to a replacement box in plenty of terminal fonts, and a broken marker on
-      // every tool call is worse than a plain one.
-      say(`  ${C.c}●${C.x} ${C.b}${name}${C.x}`
-        + `${arg ? `  ${C.dim}${String(arg).replace(/\s+/g, ' ').slice(0, 68)}${C.x}` : ''}\n`)
+      // `● Name(args)` — BLACK_CIRCLE, bold name, args parenthesised. The bullet
+      // is dim while the call is unresolved, matching the original's loader.
+      const a = String(arg).replace(/\s+/g, ' ').slice(0, 68)
+      say(`${C.dim}●${C.x} ${C.b}${name}${C.x}${a ? `(${a})` : ''}\n`)
     },
     // One line under each call. A call with nothing under it reads as though it
     // never returned; the full output is in the transcript, so this only has to
@@ -215,7 +214,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       const head = (lines[0] ?? '(no output)').replace(/\s+/g, ' ').slice(0, 66)
       const more = lines.length > 1 ? ` ${C.dim}+${lines.length - 1} line${lines.length === 2 ? '' : 's'}${C.x}` : ''
       const mark = isError ? `${C.r}└${C.x}` : `${C.dim}└${C.x}`
-      say(`  ${mark} ${C.dim}${head}${C.x}${more}\n`)
+      say(`  ${mark}  ${C.dim}${head}${C.x}${more}\n`)
     },
     onAsk: askPermission,
   })
