@@ -68,14 +68,16 @@ function boundResult(name, content) {
  */
 export function createSession({
   cwd, model, onToken, onNotice, onTool, permissionMode = 'default',
-  mcp = null, resumeFrom = null, loadBrain = true,
+  mcp = null, resumeFrom = null, forkParent = null, loadBrain = true,
 }) {
   const settings = loadSettings()
   const provider = providerConfig(settings)
   if (model) provider.model = model
 
   const sessionId = randomUUID()
-  const transcript = new Transcript(sessionId, cwd)
+  // A fork records its parent, so replay can follow the chain instead of the
+  // branch losing everything before the split.
+  const transcript = new Transcript(sessionId, cwd, forkParent)
   const session = { sessionId, cwd, transcript, permissionMode }
   const base = () => basePayload(session)
 

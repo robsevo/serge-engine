@@ -30,6 +30,7 @@ import { MODES } from './permissions.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
 import { createSpinner } from './spinner.mjs'
 import { renderStatusLine } from './statusline.mjs'
+import { renderStartup } from './startup.mjs'
 
 const C = stdout.isTTY
   ? { dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m',
@@ -59,7 +60,7 @@ const HELP = `
     Ctrl+D             exit
 `
 
-export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom = null, resumeInfo = null }) {
+export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom = null, resumeInfo = null, forkParent = null }) {
   const settings = loadSettings()
   const seats = loadSeats()
   // The brain authors its own slash commands as markdown; the engine finds and
@@ -84,6 +85,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     permissionMode: permissionMode || 'default',
     mcp,
     resumeFrom,
+    forkParent,
     onToken: (t) => {
       if (!streaming) { spinner.stop(); streaming = true }
       stdout.write(t)
@@ -96,23 +98,22 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     },
   })
 
-  const banner = [
-    `${C.b}serge-engine${C.x} ${C.dim}interactive${C.x}`,
-    `${C.dim}  config  ${configDir()}${C.x}`,
-    `${C.dim}  router  ${providerConfig(settings).baseUrl}`
-      + `${seats ? ` · ${seats.size} seats` : ''}${C.x}`,
-    `${C.dim}  seat    ${session.model} · mode ${session.mode}${C.x}`,
-    `${C.dim}  brain   ${commands.size} command(s) · ${session.skills.size} skill(s)`
-      + `${mcp?.report ? ` · mcp ${mcp.report}` : ''}${C.x}`,
-    ...(session.resumed
-      ? [`${C.g}  resumed ${resumeInfo ? resumeInfo.id.slice(0, 8) : ''} · `
-         + `${session.resumed.turns} prior turn(s)`
-         + `${session.resumed.dropped ? `, ${session.resumed.dropped} trimmed` : ''}${C.x}`]
-      : []),
-    `${C.dim}  /help for commands, Ctrl+D to exit${C.x}`,
-    '',
-  ].join('\n')
-  stdout.write(banner)
+  stdout.write(renderStartup({
+    seats,
+    baseUrl: providerConfig(settings).baseUrl,
+    cwd,
+    model: session.model,
+    mode: session.mode,
+    commands: commands.size,
+    skills: session.skills.size,
+    agents: session.agents.size,
+    mcp: mcp?.servers?.length ? `${mcp.servers.length}` : '',
+    resumed: session.resumed
+      ? `${forkParent ? 'forked from' : 'resumed'} ${resumeInfo ? resumeInfo.id.slice(0, 8) : ''}`
+        + ` · ${session.resumed.turns} prior turn(s)`
+      : null,
+    color: Boolean(stdout.isTTY),
+  }))
 
   const rl = createInterface({
     input: stdin,

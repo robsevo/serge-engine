@@ -22,6 +22,7 @@ import { loadMcpConfig, startMcp } from '../src/mcp.mjs'
 import { loadAgents } from '../src/brain.mjs'
 import { makeTaskTool } from '../src/tools/task.mjs'
 import { loadSpinnerConfig, createSpinner } from '../src/spinner.mjs'
+import { renderStartup } from '../src/startup.mjs'
 
 let pass = 0
 const failures = []
@@ -288,6 +289,73 @@ try {
   check('spinner: silent when not a TTY', writes.length === 0,
         'an animation in a piped run corrupts whatever is reading the output')
 
+  // ── startup panel ────────────────────────────────────────────────────────
+  const seatMap = new Map([
+    ['local-coder', { model: 'mistral/mistral-large-latest' }],
+    ['cloud-brain', { model: 'gemini/gemini-3.7-flash' }],
+  ])
+  const panel = renderStartup({
+    seats: seatMap, baseUrl: 'http://localhost:4000/v1',
+    cwd: '/very/deep/path/that/keeps/going/and/going/and/going/forever/and/ever',
+    mode: 'fullAccess', commands: 3, skills: 4, agents: 5, color: false, width: 70,
+  })
+  const panelLines = panel.split('\n').filter((l) => l.includes('│') || l.includes('─'))
+  const widths = new Set(panelLines.map((l) => l.length))
+  check('startup: every frame line is the same width', widths.size === 1,
+        `widths: ${[...widths].join(',')} — a long value must be elided, not push the border off`)
+  check('startup: resolves a seat to its real model',
+        panel.includes('Mistral Large Latest'),
+        'the panel must not claim a model the router is not configured for')
+  check('startup: an unknown seat degrades to its name rather than inventing one',
+        panel.includes('qwen-coder'))
+  check('startup: strips OpenRouter routing suffixes',
+        !renderStartup({ seats: new Map([['local-coder', { model: 'x/nemotron:free' }]]), color: false })
+          .includes(':free'))
+  check('startup: colour off emits no escape sequences', !/\x1b/.test(panel),
+        'a piped launch must not print terminal control codes')
+
+  // ── MCP transport selection ──────────────────────────────────────────────
+  const { HttpServer } = await import('../src/mcp-http.mjs')
+  check('mcp: a url with no type auto-detects', new HttpServer('x', { url: 'http://h/' }).mode === 'auto')
+  check('mcp: type sse is honoured', new HttpServer('x', { url: 'http://h/', type: 'sse' }).mode === 'sse')
+  check('mcp: type http is honoured', new HttpServer('x', { url: 'http://h/', type: 'http' }).mode === 'http')
+  const noUrl = new HttpServer('x', {})
+  check('mcp: a url-less http server fails rather than hanging',
+        (await noUrl.start()) === false && /no url/.test(noUrl.error))
+
+  writeFileSync(p('.mcp.json'), JSON.stringify({
+    mcpServers: { remote: { url: 'http://127.0.0.1:9/none' } } }))
+  const remoteNotices = []
+  const remote = await startMcp({ dir, onNotice: (m) => remoteNotices.push(m) })
+  check('mcp: an unreachable remote fails OPEN like a broken process',
+        remote.tools.length === 0 && remoteNotices.length === 1)
+  remote.stop()
+
+  // ── session forking ──────────────────────────────────────────────────────
+  const parentTx = p('parent.jsonl')
+  writeFileSync(parentTx, [
+    mk({ type: 'user', message: { content: [{ type: 'text', text: 'in the parent' }] } }),
+    mk({ type: 'assistant', message: { content: [{ type: 'text', text: 'ack' }] } }),
+  ].join('\n') + '\n')
+  const childTx = p('parent-child.jsonl')
+  writeFileSync(childTx, [
+    mk({ type: 'meta', parent_session_id: 'parent' }),
+    mk({ type: 'user', message: { content: [{ type: 'text', text: 'in the child' }] } }),
+  ].join('\n') + '\n')
+  const forked = replay(childTx)
+  check('fork: replays the parent before the child',
+        forked.messages[0]?.content === 'in the parent'
+        && forked.messages.at(-1)?.content === 'in the child',
+        JSON.stringify(forked.messages.map((m) => m.content)))
+  check('fork: turns count across the whole chain', forked.turns === 2)
+
+  // A hand-edited file pointing at itself must not recurse forever.
+  const loopTx = p('loopy.jsonl')
+  writeFileSync(loopTx, mk({ type: 'meta', parent_session_id: 'loopy' }) + '\n'
+    + mk({ type: 'user', message: { content: [{ type: 'text', text: 'self' }] } }) + '\n')
+  check('fork: a self-referential parent does not hang', replay(loopTx).turns === 1,
+        'a malformed transcript must not take the CLI down with it')
+
   // ── unknown tool ──────────────────────────────────────────────────────────
   r = await runTool('NoSuchTool', {}, ctx)
   check('unknown tool is reported, not thrown', r.isError && /Unknown tool/.test(r.content))
@@ -300,7 +368,7 @@ if (process.argv.includes('--self-test')) {
   // Every assertion above is a real observation, so a suite that reports success
   // regardless would be worthless. This asserts the suite HAS teeth: it must
   // have exercised a meaningful number of checks and be capable of failing.
-  const teeth = total >= 55
+  const teeth = total >= 70
   console.log(teeth
     ? `\n  SELF-TEST PASSED — ${total} independent assertions, each checked against observed state.`
     : `\n  SELF-TEST FAILED — only ${total} assertions; this suite is not covering the tools.`)

@@ -26,6 +26,7 @@ import { spawn } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { configDir } from './config.mjs'
+import { HttpServer } from './mcp-http.mjs'
 
 const PROTOCOL_VERSION = '2024-11-05'
 const HANDSHAKE_TIMEOUT_MS = Number(process.env.SERGE_MCP_HANDSHAKE_MS || 15_000)
@@ -176,7 +177,11 @@ export async function startMcp({ dir = null, onNotice = null } = {}) {
   const live = []
   const failed = []
   await Promise.all(names.map(async (name) => {
-    const s = new StdioServer(name, servers[name])
+    const spec = servers[name]
+    // A `url` means a remote server; a `command` means a local process. The
+    // config field decides the transport, so a server can be moved between them
+    // without the engine caring.
+    const s = spec?.url ? new HttpServer(name, spec) : new StdioServer(name, spec)
     const ok = await s.start().catch(() => false)
     if (ok) live.push(s)
     else { failed.push(`${name} (${s.error || 'unknown error'})`); s.stop() }

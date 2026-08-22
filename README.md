@@ -221,14 +221,20 @@ Plus every command the brain authors in `commands/*.md` — `/recap`, `/plans`,
 `/learn` and the rest — which expand to their authored prompt. Tab completion
 lists them all.
 
-**Resuming.** A session survives the process:
+**Resuming and branching.** A session survives the process, and can be split:
 
 ```bash
-serge --sessions          # what is resumable here
+serge --sessions          # what is resumable here (forks show ↳parent)
 serge --continue          # newest conversation in this directory
 serge --resume 4f2a       # by id or prefix
-serge -c -p "and now?"    # resume works headless too
+serge --fork 4f2a         # branch: continue it in a NEW transcript
+serge -c -p "and now?"    # both work headless too
 ```
+
+A fork **points at** its parent rather than copying it. Copying would double
+every byte per branch and leave two records that can disagree; a pointer keeps
+one source of truth, makes the branch structure visible in the listing, and lets
+the same conversation be forked any number of times.
 
 Three interrupts, deliberately different:
 
@@ -293,11 +299,19 @@ supply chain.
   itself. Token usage is written into the transcript in the shape the brain's
   `statusline.sh` reads, so `tok` counts are real rather than `0/0`
 
+- **MCP over stdio, Streamable HTTP and legacy SSE** — a `url` in the config
+  selects a remote server; `type` picks the transport, and with none given it
+  tries Streamable HTTP and falls back to SSE on the 404/405 an older server
+  answers with
+- **session branching** — `--fork [id]` continues a conversation in a *new*
+  transcript that points back at the original. The parent is never appended to,
+  so it can be forked again, and replay walks the chain rather than copying it
+
 **Does not, stated plainly so nobody discovers it later:**
 
-- MCP is **stdio transport only** — no SSE or HTTP servers
-- the session is a line-based REPL, not a full-screen TUI: no panes, no mouse
-- no session *branching* — resume continues a conversation, it does not fork one
+- the session is a line-based REPL with a boxed startup panel, a spinner and a
+  status line — not a full-screen TUI with panes or mouse support
+- no OAuth for remote MCP servers — bearer tokens via `headers` only
 
 ## 5. The contract
 

@@ -17,8 +17,20 @@
  * and replaying the old ones would stack the same directive twice.
  */
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { projectsDir } from './config.mjs'
+
+/** The `parent_session_id` a fork records in its first line, if any. */
+function parentOf(lines) {
+  for (const line of lines.slice(0, 3)) {
+    if (!line) continue
+    try {
+      const e = JSON.parse(line)
+      if (e.type === 'meta' && e.parent_session_id) return e.parent_session_id
+    } catch { /* not the marker */ }
+  }
+  return null
+}
 
 /** Slug a cwd the same way Transcript does, so listing finds the same directory. */
 export function slugFor(cwd) {
@@ -41,8 +53,10 @@ export function listSessions(cwd, limit = 20) {
     let st
     try { st = statSync(path) } catch { continue }
     const { turns, preview } = summarize(path)
-    if (!turns) continue                       // an empty session is noise
-    out.push({ id: n.replace(/\.jsonl$/, ''), path, mtime: st.mtimeMs, turns, preview })
+    let parent = null
+    try { parent = parentOf(readFileSync(path, 'utf8').split('\n')) } catch { /* unreadable */ }
+    if (!turns && !parent) continue            // an empty session is noise
+    out.push({ id: n.replace(/\.jsonl$/, ''), path, mtime: st.mtimeMs, turns, preview, parent })
   }
   return out.sort((a, b) => b.mtime - a.mtime).slice(0, limit)
 }
@@ -83,13 +97,31 @@ export function findSession(cwd, ref = null) {
  * Replay a transcript into provider messages.
  * @returns {{messages: Array, turns: number, dropped: number}}
  */
-export function replay(path, { maxChars = 300_000 } = {}) {
+export function replay(path, { maxChars = 300_000, _seen = new Set() } = {}) {
   const messages = []
   let turns = 0
   if (!existsSync(path)) return { messages, turns, dropped: 0 }
 
   let lines
   try { lines = readFileSync(path, 'utf8').split('\n') } catch { return { messages, turns, dropped: 0 } }
+
+  // A fork points at its parent instead of copying it, so the parent's messages
+  // are replayed first. `_seen` stops a hand-edited cycle from recursing
+  // forever — a malformed file should not hang the CLI.
+  // Seed with THIS file's own id before following the pointer. Guarding only on
+  // the parent still lets a self-referential file replay itself once, which
+  // silently doubles the conversation instead of hanging — a quieter bug than
+  // the loop it was meant to prevent.
+  const selfId = basename(path, '.jsonl')
+  _seen.add(selfId)
+  const parentId = parentOf(lines)
+  if (parentId && !_seen.has(parentId)) {
+    _seen.add(parentId)
+    const parentPath = join(dirname(path), `${parentId}.jsonl`)
+    const up = replay(parentPath, { maxChars, _seen })
+    messages.push(...up.messages)
+    turns += up.turns
+  }
 
   for (const line of lines) {
     if (!line) continue
@@ -171,7 +203,8 @@ export function renderSessions(sessions) {
   const now = Date.now()
   return sessions.map((s, i) => {
     const age = ago(now - s.mtime)
-    return `  ${String(i + 1).padStart(2)}. ${s.id.slice(0, 8)}  ${age.padEnd(8)}`
+    const branch = s.parent ? `↳${s.parent.slice(0, 4)} ` : '     '
+    return `  ${String(i + 1).padStart(2)}. ${s.id.slice(0, 8)}  ${branch}${age.padEnd(8)}`
       + `${String(s.turns).padStart(3)} turn${s.turns === 1 ? ' ' : 's'}  ${s.preview}`
   }).join('\n')
 }

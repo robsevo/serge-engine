@@ -61,8 +61,10 @@ export async function main(argv = process.argv.slice(2)) {
   // to discover a typo.
   let resumeFrom = null
   let resumeInfo = null
-  if (has('--continue', '-c') || has('--resume', '-r')) {
-    const ref = val('--resume') || val('-r')
+  let forkParent = null
+  const forking = has('--fork')
+  if (has('--continue', '-c') || has('--resume', '-r') || forking) {
+    const ref = val('--resume') || val('-r') || val('--fork')
     const hit = findSession(process.cwd(), ref && !ref.startsWith('-') ? ref : null)
     if (!hit) {
       process.stderr.write(ref
@@ -72,6 +74,9 @@ export async function main(argv = process.argv.slice(2)) {
     }
     resumeFrom = hit.path
     resumeInfo = hit
+    // A fork continues the conversation in a NEW transcript that points back at
+    // the original, so the original is never appended to and can be forked again.
+    if (forking) forkParent = hit.id
   }
 
   // No -p means an interactive session. Refuse only when there is no terminal
@@ -97,7 +102,7 @@ export async function main(argv = process.argv.slice(2)) {
     try {
       return await repl({
         cwd: process.cwd(), model: val('--model'), permissionMode: mode0,
-        mcp, resumeFrom, resumeInfo,
+        mcp, resumeFrom, resumeInfo, forkParent,
       })
     } finally {
       mcp.stop()
@@ -136,6 +141,7 @@ export async function main(argv = process.argv.slice(2)) {
       model: val('--model'),
       mcp,
       resumeFrom,
+      forkParent,
       permissionMode: mode,
       onToken: (t) => process.stdout.write(t),
       onNotice: (m) => process.stderr.write(`serge-engine: ${m}\n`),
@@ -170,6 +176,8 @@ const HELP = `serge-engine ${VERSION} — an MIT agent engine for serge-public
   --model <seat>           override OPENAI_MODEL for this run
   --continue, -c           resume the most recent session in this directory
   --resume [id]            resume a session by id or prefix (newest if omitted)
+  --fork [id]              branch from a session — continues it in a NEW
+                           transcript, leaving the original untouched
   --sessions               list resumable sessions here
   --seats                  list the model seats this router has configured
   --permission-mode <m>    default | acceptEdits | plan | bypassPermissions | fullAccess

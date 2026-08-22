@@ -17,12 +17,21 @@ import { randomUUID } from 'node:crypto'
 import { projectsDir } from './config.mjs'
 
 export class Transcript {
-  constructor(sessionId, cwd) {
+  constructor(sessionId, cwd, parent = null) {
     this.sessionId = sessionId
     // Mirrors serge's layout: one directory per project, slugified from cwd.
     const slug = cwd.replace(/[/\\]/g, '-').replace(/^-/, '') || 'root'
     this.path = join(projectsDir(), slug, `${sessionId}.jsonl`)
     mkdirSync(dirname(this.path), { recursive: true })
+    // Lineage marker, written before anything else. A fork does NOT copy its
+    // parent's entries — it points at them. Copying would double every byte of
+    // a long conversation per branch and leave two records that can disagree
+    // after an edit; a pointer keeps one source of truth and makes the branch
+    // structure visible to anything reading the directory.
+    if (parent) {
+      this.parent = parent
+      this.#append({ type: 'meta', parent_session_id: parent })
+    }
   }
 
   #append(entry) {
