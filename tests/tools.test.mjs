@@ -22,7 +22,7 @@ import { loadMcpConfig, startMcp } from '../src/mcp.mjs'
 import { loadAgents } from '../src/brain.mjs'
 import { makeTaskTool } from '../src/tools/task.mjs'
 import { loadSpinnerConfig, createSpinner } from '../src/spinner.mjs'
-import { renderStartup } from '../src/startup.mjs'
+import { renderStartup, resolvePalette } from '../src/startup.mjs'
 import { createPane, fit, visible } from '../src/pane.mjs'
 
 let pass = 0
@@ -298,9 +298,13 @@ try {
   const panel = renderStartup({
     seats: seatMap, baseUrl: 'http://localhost:4000/v1',
     cwd: '/very/deep/path/that/keeps/going/and/going/and/going/forever/and/ever',
-    mode: 'fullAccess', commands: 3, skills: 4, agents: 5, color: false, width: 70,
+    mode: 'fullAccess', commands: 3, skills: 4, agents: 5, color: false,
   })
-  const panelLines = panel.split('\n').filter((l) => l.includes('│') || l.includes('─'))
+  // Double-ruled box: ║ on the sides, ═ on the rules. Every framed line must be
+  // the same printable width or a long value has pushed the border off.
+  // Anchored at column 0: the ANSI-Shadow wordmark is drawn from the SAME box
+  // characters, and an unanchored match sweeps those rows in too.
+  const panelLines = panel.split('\n').filter((l) => /^[║╔╠╚]/.test(l))
   const widths = new Set(panelLines.map((l) => l.length))
   check('startup: every frame line is the same width', widths.size === 1,
         `widths: ${[...widths].join(',')} — a long value must be elided, not push the border off`)
@@ -312,6 +316,8 @@ try {
   check('startup: strips OpenRouter routing suffixes',
         !renderStartup({ seats: new Map([['local-coder', { model: 'x/nemotron:free' }]]), color: false })
           .includes(':free'))
+  check('startup: palettes are selectable and fall back to ocean',
+        resolvePalette('ember').accent[0] === 255 && resolvePalette('nope') === resolvePalette('ocean'))
   check('startup: colour off emits no escape sequences', !/\x1b/.test(panel),
         'a piped launch must not print terminal control codes')
 
