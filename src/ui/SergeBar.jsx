@@ -19,7 +19,7 @@ export function SergeBar({ version, effort, cwd, pose, feetFrame, isLoading }) {
           <Text dimColor> v{version}</Text>
         </Text>
         <Text dimColor>Hive-mode{effort ? ` with ${effort} effort` : ''}</Text>
-        <Text dimColor>{cwd}</Text>
+        <Text dimColor wrap="truncate-start">{cwd}</Text>
         {isLoading ? <Text dimColor>thinking…</Text> : null}
       </Box>
     </Box>

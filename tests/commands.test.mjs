@@ -55,6 +55,16 @@ const shadow = catalog(brain).filter((c) => c.name === 'help')
 ok('a shadowed name appears twice', shadow.length === 2, `saw ${shadow.length}`)
 ok('the shadowed one says so', shadow.some((c) => /shadowed/.test(c.description)))
 
+// The menu renders one row per entry, so entries must be distinguishable by
+// something. Keying on the NAME alone shipped a React duplicate-key warning the
+// moment a brain published its own /cost — the shadow case two asserts above
+// says is deliberate. source+name is the identity.
+const keys = catalog(brain).map((c) => c.source + ':' + c.name)
+ok('catalogue entries have unique identities', new Set(keys).size === keys.length,
+   `dupes: ${keys.filter((k, i) => keys.indexOf(k) !== i).join(', ')}`)
+const names = catalog(brain).map((c) => c.name)
+ok('and names alone are NOT unique — which is why', new Set(names).size !== names.length)
+
 // ── every offered command dispatches ───────────────────────────────────────
 // This is the property that matters: `/` must not advertise a dead name.
 const dead = []

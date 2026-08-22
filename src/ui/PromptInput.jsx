@@ -117,7 +117,11 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, busy, history,
           {shown.map((m, i) => {
             const active = top + i === Math.min(sel, matches.length - 1)
             return (
-              <Box key={m.name}>
+              // Keyed on source+name, not name: a brain command that shadows
+              // a built-in appears TWICE by design (so you can see why your
+              // file never runs), and two rows keyed `cost` make React drop
+              // one and warn.
+              <Box key={m.source + ':' + m.name}>
                 <Text color={active ? BLUE : undefined} bold={active}>
                   {(active ? ' ❯ ' : '   ') + ('/' + m.name).padEnd(width)}
                 </Text>
