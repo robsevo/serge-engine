@@ -8,6 +8,7 @@
 import { runSession } from './loop.mjs'
 import { providerConfig, loadSettings, configDir } from './config.mjs'
 import { MODES } from './permissions.mjs'
+import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 
 export const VERSION = '0.1.0'
 
@@ -18,11 +19,19 @@ export async function main(argv = process.argv.slice(2)) {
   if (has('--version', '-v')) { console.log(`${VERSION} (serge-engine)`); return 0 }
   if (has('--help', '-h')) { console.log(HELP); return 0 }
 
+  if (has('--seats')) {
+    console.log(renderSeats())
+    return 0
+  }
+
   if (has('--doctor')) {
     const p = providerConfig(loadSettings())
+    const seats = loadSeats()
+    const verdict = checkSeat(p.model, seats)
     console.log(`config dir : ${configDir()}`)
     console.log(`router     : ${p.baseUrl}`)
-    console.log(`model      : ${p.model}`)
+    console.log(`model      : ${p.model}${verdict.ok ? (seats ? ' ✓' : '') : '  ✗ NOT IN ROSTER'}`)
+    console.log(`seats      : ${seats ? `${seats.size} configured (--seats to list)` : 'no litellm.yaml found'}`)
     try {
       // A doctor that hangs is worse than one that reports a failure.
       const r = await fetch(`${p.baseUrl}/models`, {
@@ -56,6 +65,16 @@ export async function main(argv = process.argv.slice(2)) {
   const mode = has('--yolo', '--auto') ? 'fullAccess' : (val('--permission-mode') || 'default')
   if (!MODES.includes(mode)) {
     process.stderr.write(`serge-engine: unknown permission mode "${mode}" (expected: ${MODES.join(', ')})\n`)
+    return 64
+  }
+
+  // Check the seat BEFORE the request. A typo otherwise surfaces as a router
+  // error part-way through a turn, which reads like an outage rather than a
+  // misspelling — the roster is right there, so say so in 40ms.
+  const seatName = val('--model') || providerConfig(loadSettings()).model
+  const seatCheck = checkSeat(seatName)
+  if (!seatCheck.ok) {
+    process.stderr.write(`serge-engine: ${seatCheck.reason}\n`)
     return 64
   }
 
@@ -93,6 +112,7 @@ const HELP = `serge-engine ${VERSION} — an MIT agent engine for serge-public
   serge --version
 
   --model <seat>           override OPENAI_MODEL for this run
+  --seats                  list the model seats this router has configured
   --permission-mode <m>    default | acceptEdits | plan | bypassPermissions | fullAccess
   --yolo, --auto           shorthand for --permission-mode fullAccess
 

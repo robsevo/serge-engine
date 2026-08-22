@@ -21,6 +21,37 @@ import { shouldCompact, compact, size } from './compact.mjs'
 const MAX_TURNS = 40
 const COMPACT_AT_CHARS = Number(process.env.SERGE_COMPACT_AT || 400_000)
 
+/**
+ * Hard ceiling on what any single tool result may put into context.
+ *
+ * Every tool already caps its own output, but "every tool" is a promise that
+ * holds only until someone adds the next one. This is the choke point that does
+ * not depend on remembering: whatever a tool returns, a bounded amount reaches
+ * the model.
+ *
+ * The failure this prevents is specific and expensive. A summarize-then-inject
+ * path that FAILS OPEN — falling back to raw content when the summarizer is
+ * busy or rate-limited — can push ~25k tokens of unprocessed page into a turn.
+ * The model then spends the rest of the turn distracted by material nothing
+ * asked for, and the cause is invisible because everything "succeeded".
+ *
+ * Truncating is the fail-CLOSED choice: the model is told plainly that it is
+ * seeing a fragment and how to get the rest, which is strictly better than
+ * silently reshaping the turn.
+ */
+const MAX_TOOL_RESULT_CHARS = Number(process.env.SERGE_MAX_TOOL_RESULT || 60_000)
+
+function boundResult(name, content) {
+  const s = String(content ?? '')
+  if (s.length <= MAX_TOOL_RESULT_CHARS) return s
+  const keep = Math.floor(MAX_TOOL_RESULT_CHARS * 0.75)
+  const tail = MAX_TOOL_RESULT_CHARS - keep
+  return s.slice(0, keep)
+    + `\n\n… [${name} returned ${s.length} chars; ${s.length - MAX_TOOL_RESULT_CHARS} omitted from the middle. `
+    + `Narrow the call — a pattern, a path, a line range — rather than asking again.]\n\n`
+    + s.slice(-tail)
+}
+
 export async function runSession({
   prompt, cwd, model, onToken, onNotice, permissionMode = 'default',
 }) {
@@ -179,7 +210,7 @@ export async function runSession({
       } else if (post.context.length) {
         content = `${out.content}\n\n${post.context.join('\n')}`
       }
-      results.push({ id: call.id, content, isError })
+      results.push({ id: call.id, content: boundResult(call.name, content), isError })
     }
 
     transcript.toolResults(results)
@@ -221,7 +252,7 @@ async function subLoop({ brief, cwd, provider, settings, session, permissionMode
       const out = verdict.allow
         ? await runTool(call.name, call.input, { cwd, depth })
         : { content: `Permission denied: ${verdict.reason}`, isError: true }
-      messages.push({ role: 'tool', tool_call_id: call.id, content: String(out.content ?? '') })
+      messages.push({ role: 'tool', tool_call_id: call.id, content: boundResult(call.name, out.content) })
     }
   }
   return { text: '', error: 'subagent exhausted its turn budget' }

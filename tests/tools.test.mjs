@@ -15,6 +15,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runTool } from '../src/tools/index.mjs'
+import { loadSeats, checkSeat } from '../src/seats.mjs'
 
 let pass = 0
 const failures = []
@@ -126,6 +127,39 @@ try {
     globalThis.fetch = realFetch
   }
 
+  // ── seat awareness: what a generic engine cannot do ──────────────────────
+  // A commented-out seat must NOT count. The roster is 50KB of YAML in which
+  // most model_name lines are documentation, so a scan that ignores comments
+  // reports seats that do not exist and refuses ones that do.
+  const yaml = p('litellm.yaml')
+  writeFileSync(yaml, [
+    'model_list:',
+    '  - model_name: local-coder',
+    '    litellm_params:',
+    '      model: mistral/mistral-large-latest',
+    '      rpm: 60',
+    '  - model_name: cloud-brain',
+    '    litellm_params:',
+    '      model: gemini/gemini-3.7-flash',
+    '  # - model_name: retired-seat        <- commented out, must not count',
+    '  #   litellm_params:',
+    '  #     model: nope/nope',
+  ].join('\n'))
+  const seats = loadSeats(yaml)
+  check('seats: parses the roster', seats && seats.size === 2, `size=${seats && seats.size}`)
+  check('seats: ignores a commented-out seat', seats && !seats.has('retired-seat'))
+  check('seats: reads the provider target',
+        seats?.get('local-coder')?.model === 'mistral/mistral-large-latest')
+  check('seats: a real seat passes', checkSeat('local-coder', seats).ok)
+
+  const bad = checkSeat('local-codr', seats)
+  check('seats: a typo is rejected', !bad.ok)
+  check('seats: and the correct spelling is suggested',
+        /local-coder/.test(bad.reason), bad.reason)
+  check('seats: no roster fails OPEN rather than blocking the engine',
+        checkSeat('anything', null).ok,
+        'an engine that refuses to start because a convenience file is absent is worse than one without the convenience')
+
   // ── unknown tool ──────────────────────────────────────────────────────────
   r = await runTool('NoSuchTool', {}, ctx)
   check('unknown tool is reported, not thrown', r.isError && /Unknown tool/.test(r.content))
@@ -138,7 +172,7 @@ if (process.argv.includes('--self-test')) {
   // Every assertion above is a real observation, so a suite that reports success
   // regardless would be worthless. This asserts the suite HAS teeth: it must
   // have exercised a meaningful number of checks and be capable of failing.
-  const teeth = total >= 20
+  const teeth = total >= 25
   console.log(teeth
     ? `\n  SELF-TEST PASSED — ${total} independent assertions, each checked against observed state.`
     : `\n  SELF-TEST FAILED — only ${total} assertions; this suite is not covering the tools.`)
