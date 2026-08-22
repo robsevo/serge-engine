@@ -47,13 +47,29 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   const printIdx = argv.findIndex((a) => a === '-p' || a === '--print')
+
+  // No -p means an interactive session. Refuse only when there is no terminal
+  // to read from: a piped stdin with no -p is almost always a mistake, and
+  // opening a REPL on it would hang with no prompt visible.
   if (printIdx === -1) {
-    process.stderr.write(
-      'serge-engine 0.1.0 — headless only so far.\n'
-      + '  Use:  serge -p "your prompt"\n'
-      + '  The interactive session (M3) is not built yet.\n')
-    return 64
+    if (!process.stdin.isTTY) {
+      process.stderr.write(
+        'serge-engine: no terminal, and no -p.\n'
+        + '  Interactive needs a TTY. For a scripted run:  serge -p "your prompt"\n')
+      return 64
+    }
+    const mode0 = has('--yolo', '--auto') ? 'fullAccess' : (val('--permission-mode') || 'default')
+    if (!MODES.includes(mode0)) {
+      process.stderr.write(`serge-engine: unknown permission mode "${mode0}"\n`)
+      return 64
+    }
+    const seat0 = val('--model') || providerConfig(loadSettings()).model
+    const chk = checkSeat(seat0)
+    if (!chk.ok) { process.stderr.write(`serge-engine: ${chk.reason}\n`); return 64 }
+    const { repl } = await import('./repl.mjs')
+    return repl({ cwd: process.cwd(), model: val('--model'), permissionMode: mode0 })
   }
+
 
   const prompt = argv[printIdx + 1] ?? (await readStdin())
   if (!prompt || !prompt.trim()) {
@@ -107,6 +123,7 @@ function readStdin() {
 
 const HELP = `serge-engine ${VERSION} — an MIT agent engine for serge-public
 
+  serge                    open an interactive session
   serge -p "prompt"        run one headless turn
   serge --doctor           show config/router status
   serge --version

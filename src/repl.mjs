@@ -1,0 +1,204 @@
+/**
+ * The interactive session.
+ *
+ * A conversation that keeps going: history persists across prompts, the same
+ * hooks fire on every turn, and the loop only ends when you end it.
+ *
+ * WHY `readline` AND NOT A TUI FRAMEWORK. A full-screen TUI means a rendering
+ * library, which means a dependency tree in a process that can read your
+ * filesystem and run shell commands. Node's `readline` is in the standard
+ * library and gives the things that actually matter in a REPL: line editing,
+ * history, tab completion, and correct terminal signal handling. What it does
+ * not give — panes, mouse, a status bar that redraws — is not worth a supply
+ * chain.
+ *
+ * THE THREE INTERRUPTS, and why they differ:
+ *   Ctrl+C while generating  aborts THIS turn, keeps the session. The reply so
+ *                            far is kept in history, because the model said it
+ *                            and pretending otherwise makes the next turn
+ *                            incoherent.
+ *   Ctrl+C at an empty prompt  first press warns, second exits. A single
+ *                            keystroke should not discard a long conversation.
+ *   Ctrl+D                   exits immediately — that is what EOF means.
+ */
+import { createInterface } from 'node:readline'
+import { stdin, stdout } from 'node:process'
+import { createSession } from './loop.mjs'
+import { providerConfig, loadSettings, configDir } from './config.mjs'
+import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
+import { MODES } from './permissions.mjs'
+
+const C = stdout.isTTY
+  ? { dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m',
+      c: '\x1b[36m', x: '\x1b[0m' }
+  : { dim: '', b: '', g: '', y: '', r: '', c: '', x: '' }
+
+const HELP = `
+  ${C.b}Commands${C.x}
+    /help              this
+    /seats             model seats the router has configured
+    /model [seat]      show or switch the seat for this session
+    /mode [name]       show or switch permission mode
+                       (${MODES.join(' · ')})
+    /clear             forget the conversation, keep the session
+    /cost              turns so far, and where the transcript is
+    /exit              leave
+
+  ${C.b}Keys${C.x}
+    Ctrl+C             while generating: stop this turn
+                       at an empty prompt: press twice to exit
+    Ctrl+D             exit
+`
+
+export async function repl({ cwd, model, permissionMode }) {
+  const settings = loadSettings()
+  const seats = loadSeats()
+
+  const session = createSession({
+    cwd,
+    model,
+    permissionMode: permissionMode || 'default',
+    onToken: (t) => stdout.write(t),
+    onNotice: (m) => stdout.write(`${C.dim}  · ${m}${C.x}\n`),
+  })
+
+  const banner = [
+    `${C.b}serge-engine${C.x} ${C.dim}interactive${C.x}`,
+    `${C.dim}  config  ${configDir()}${C.x}`,
+    `${C.dim}  router  ${providerConfig(settings).baseUrl}`
+      + `${seats ? ` · ${seats.size} seats` : ''}${C.x}`,
+    `${C.dim}  seat    ${session.model} · mode ${session.mode}${C.x}`,
+    `${C.dim}  /help for commands, Ctrl+D to exit${C.x}`,
+    '',
+  ].join('\n')
+  stdout.write(banner)
+
+  const rl = createInterface({
+    input: stdin,
+    output: stdout,
+    prompt: `${C.c}❯${C.x} `,
+    historySize: 500,
+    completer(line) {
+      const cmds = ['/help', '/seats', '/model', '/mode', '/clear', '/cost', '/exit']
+      const hits = cmds.filter((c) => c.startsWith(line))
+      return [hits.length ? hits : (line.startsWith('/') ? cmds : []), line]
+    },
+  })
+
+  let generating = null          // AbortController while a turn is in flight
+  let pendingExit = false        // armed by a Ctrl+C at an empty prompt
+  // rl.close() does not end the for-await immediately — the iterator drains
+  // whatever is already buffered first. Prompting during that drain throws
+  // ERR_USE_AFTER_CLOSE, which is how /exit crashed instead of exiting.
+  let closing = false
+
+  const prompt = () => { if (!closing) rl.prompt() }
+
+  // readline's own SIGINT handling would kill the process. Take it over so a
+  // Ctrl+C can mean "stop this turn" without meaning "throw away the session".
+  rl.on('SIGINT', () => {
+    if (generating) {
+      generating.abort()
+      stdout.write(`\n${C.y}  · stopped${C.x}\n`)
+      return
+    }
+    if (pendingExit) { closing = true; rl.close(); return }
+    pendingExit = true
+    stdout.write(`\n${C.dim}  (Ctrl+C again to exit, or keep typing)${C.x}\n`)
+    prompt()
+  })
+
+  async function handleCommand(line) {
+    const [cmd, ...rest] = line.trim().split(/\s+/)
+    const arg = rest.join(' ').trim()
+
+    switch (cmd) {
+      case '/help':
+        stdout.write(HELP)
+        return true
+
+      case '/seats':
+        stdout.write(renderSeats(seats) + '\n')
+        return true
+
+      case '/model': {
+        if (!arg) { stdout.write(`  ${session.model}\n`); return true }
+        const v = checkSeat(arg, seats)
+        if (!v.ok) { stdout.write(`${C.r}  ${v.reason}${C.x}\n`); return true }
+        session.model = arg
+        stdout.write(`${C.g}  seat → ${arg}${C.x}\n`)
+        return true
+      }
+
+      case '/mode': {
+        if (!arg) { stdout.write(`  ${session.mode}\n`); return true }
+        if (!MODES.includes(arg)) {
+          stdout.write(`${C.r}  unknown mode "${arg}" — expected: ${MODES.join(', ')}${C.x}\n`)
+          return true
+        }
+        session.mode = arg
+        stdout.write(`${C.g}  mode → ${arg}${C.x}\n`)
+        return true
+      }
+
+      case '/clear':
+        session.clear()
+        stdout.write(`${C.g}  conversation cleared${C.x} ${C.dim}(the transcript still has it)${C.x}\n`)
+        return true
+
+      case '/cost':
+        stdout.write(`  ${session.turns} turn(s)\n  ${C.dim}${session.transcriptPath}${C.x}\n`)
+        return true
+
+      case '/exit':
+      case '/quit':
+        closing = true
+        rl.close()
+        return true
+
+      default:
+        if (cmd.startsWith('/')) {
+          stdout.write(`${C.r}  unknown command ${cmd}${C.x} — /help\n`)
+          return true
+        }
+        return false
+    }
+  }
+
+  prompt()
+
+  for await (const line of rl) {
+    if (closing) break
+    pendingExit = false
+    const text = line.trim()
+    if (!text) { prompt(); continue }
+
+    if (await handleCommand(text)) { prompt(); continue }
+
+    generating = new AbortController()
+    // Pause input while the model streams: keystrokes typed mid-generation
+    // would otherwise interleave with the output and land in the next prompt.
+    rl.pause()
+    try {
+      const res = await session.send(text, { signal: generating.signal })
+      if (res.blocked) {
+        stdout.write(`${C.y}  blocked: ${res.reason}${C.x}\n`)
+      } else if (res.exhausted) {
+        stdout.write(`\n${C.y}  · turn budget exhausted without a final answer${C.x}\n`)
+      }
+      stdout.write('\n')
+    } catch (e) {
+      const aborted = e?.name === 'AbortError' || generating.signal.aborted
+      if (!aborted) stdout.write(`\n${C.r}  error: ${e?.message ?? e}${C.x}\n`)
+      else stdout.write('\n')
+    } finally {
+      generating = null
+      if (!closing) rl.resume()
+    }
+    prompt()
+  }
+
+  stdout.write(`${C.dim}  session ${session.sessionId.slice(0, 8)} · ${session.turns} turn(s)\n`
+    + `  ${session.transcriptPath}${C.x}\n`)
+  return 0
+}

@@ -52,8 +52,17 @@ function boundResult(name, content) {
     + s.slice(-tail)
 }
 
-export async function runSession({
-  prompt, cwd, model, onToken, onNotice, permissionMode = 'default',
+/**
+ * A session: conversation state that outlives a single prompt.
+ *
+ * The headless path (`runSession`, below) is one call to `send()`; an
+ * interactive session is many. Everything that must persist across turns —
+ * the message history, the permission mode after a plan is approved, the
+ * transcript, whether SessionStart has fired — lives here rather than inside
+ * the turn, which is what makes the second prompt aware of the first.
+ */
+export function createSession({
+  cwd, model, onToken, onNotice, permissionMode = 'default',
 }) {
   const settings = loadSettings()
   const provider = providerConfig(settings)
@@ -64,20 +73,9 @@ export async function runSession({
   const session = { sessionId, cwd, transcript, permissionMode }
   const base = () => basePayload(session)
 
-  runHooks('SessionStart', { ...base(), source: 'startup' }, 'startup', settings)
-
-  const ups = runHooks('UserPromptSubmit', { ...base(), prompt }, undefined, settings)
-  if (ups.blocked) {
-    onNotice?.(`blocked: ${ups.reason}`)
-    return { text: '', blocked: true, reason: ups.reason, sessionId, transcriptPath: transcript.path }
-  }
-
-  transcript.userPrompt(prompt)
-
-  let messages = [
-    ...ups.context.map((c) => ({ role: 'system', content: c })),
-    { role: 'user', content: prompt },
-  ]
+  let messages = []
+  let mode = permissionMode
+  let started = false
 
   /** Subagent spawner, injected into the Task tool (see tools/task.mjs). */
   const spawnSubagent = async ({ prompt: brief, label }) => {
@@ -98,9 +96,32 @@ export async function runSession({
     }
   }
 
+  /**
+   * One user prompt, run to a final answer.
+   * @param {string} prompt
+   * @param {{signal?: AbortSignal}} [opts] signal aborts an in-flight generation
+   */
+  async function send(prompt, { signal } = {}) {
+    // SessionStart fires once for the session, not once per prompt: its 10
+    // hooks load memory, the repo card and the reasoning overlay, and re-running
+    // them every turn would re-inject the same context indefinitely.
+    if (!started) {
+      runHooks('SessionStart', { ...base(), source: 'startup' }, 'startup', settings)
+      started = true
+    }
+
+    const ups = runHooks('UserPromptSubmit', { ...base(), prompt }, undefined, settings)
+    if (ups.blocked) {
+      onNotice?.(`blocked: ${ups.reason}`)
+      return { text: '', blocked: true, reason: ups.reason }
+    }
+
+    transcript.userPrompt(prompt)
+    for (const c of ups.context) messages.push({ role: 'system', content: c })
+    messages.push({ role: 'user', content: prompt })
+
   let final = ''
   let stopHookActive = false
-  let mode = permissionMode
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     // Compaction happens BEFORE the request, never mid-flight: a summary built
@@ -119,7 +140,7 @@ export async function runSession({
     }
 
     const { text, toolCalls } = await complete({
-      ...provider, messages, tools: toolSchemas(), onToken, onNotice,
+      ...provider, messages, tools: toolSchemas(), onToken, onNotice, signal,
     })
 
     if (!toolCalls.length) {
@@ -145,7 +166,7 @@ export async function runSession({
       }
 
       runHooks('TaskCompleted', { ...base(), last_assistant_message: text }, undefined, settings)
-      return { text: final, blocked: false, sessionId, transcriptPath: transcript.path }
+      return { text: final, blocked: false }
     }
 
     transcript.assistantToolUse(toolCalls)
@@ -219,8 +240,32 @@ export async function runSession({
     }
   }
 
-  onNotice?.(`stopped after ${MAX_TURNS} turns without a final answer`)
-  return { text: final, blocked: false, exhausted: true, sessionId, transcriptPath: transcript.path }
+    onNotice?.(`stopped after ${MAX_TURNS} turns without a final answer`)
+    return { text: final, blocked: false, exhausted: true }
+  }
+
+  return {
+    sessionId,
+    transcriptPath: transcript.path,
+    send,
+    /** Live view for the REPL's status line and /model. */
+    get model() { return provider.model },
+    set model(m) { provider.model = m },
+    get mode() { return mode },
+    set mode(m) { mode = m },
+    get turns() { return messages.filter((m) => m.role === 'user').length },
+    /** Drop history but keep the session — the transcript still records it. */
+    clear() { messages = []; return true },
+  }
+}
+
+/**
+ * Headless: one prompt, one answer. A session with exactly one `send`.
+ */
+export async function runSession({ prompt, ...opts }) {
+  const s = createSession(opts)
+  const r = await s.send(prompt)
+  return { ...r, sessionId: s.sessionId, transcriptPath: s.transcriptPath }
 }
 
 /**

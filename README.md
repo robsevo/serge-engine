@@ -14,6 +14,7 @@ never calls Anthropic.
 1. [Why this exists](#1-why-this-exists)
 2. [How it fits](#2-how-it-fits) — the diagrams
 3. [Install and pair](#3-install-and-pair)
+   - [3.2 The session](#32-the-session)
 4. [What works, and what does not](#4-what-works-and-what-does-not)
 5. [The contract](#5-the-contract)
 6. [Verification](#6-verification)
@@ -41,9 +42,9 @@ run.
 This is the missing half. It is not a Claude Code fork and shares no code with
 one; it is a fresh implementation of the interface the brain expects.
 
-> **Status: young, and honest about it.** The headless path (`-p`) is complete
-> and tested. There is no interactive TUI yet — see
-> [§4](#4-what-works-and-what-does-not) before you decide which engine to run.
+> **Status: young, and honest about it.** Interactive sessions and the headless
+> path both work. What is still missing — MCP, session resume, skills loading —
+> is listed in [§4](#4-what-works-and-what-does-not) rather than glossed.
 
 ## 2. How it fits
 
@@ -152,16 +153,56 @@ SERGE_HOME=~/.serge-trial serge -p "reply with: ok"
 
 A monorepo would couple them: every hook tweak would ship a new engine, and the
 brain could no longer claim to run on *any* conforming engine — which is exactly
-the property that lets you keep a Claude Code derivative underneath while this
-one grows an interactive mode.
+the property that lets you keep a Claude Code derivative underneath if you want
+MCP or session resume, which this engine does not have yet.
 
 They meet at a contract, not an API. If you pin, pin both to the same revision of
 [`docs/ENGINE-CONTRACT.md`](docs/ENGINE-CONTRACT.md).
+
+### 3.2 The session
+
+`serge` with no `-p` opens a conversation. It keeps history across turns, fires
+the brain's hooks on every one, and only ends when you end it.
+
+```
+❯ what does src/loop.mjs do?
+…
+❯ now add a test for the compaction path
+…
+```
+
+| | |
+|---|---|
+| `/help` | the commands below |
+| `/seats` | what the router has configured |
+| `/model [seat]` | show or switch seat, mid-conversation |
+| `/mode [name]` | show or switch permission mode |
+| `/clear` | forget the history, keep the session |
+| `/cost` | turns so far, and the transcript path |
+| `/exit` | leave |
+
+Three interrupts, deliberately different:
+
+- **`Ctrl+C` while generating** stops that turn and returns to the prompt. The
+  partial reply stays in history — the model said it, and pretending otherwise
+  makes the next turn incoherent.
+- **`Ctrl+C` at an empty prompt** warns; a second press exits. One keystroke
+  should not discard a long conversation.
+- **`Ctrl+D`** exits, because that is what EOF means.
+
+It is a line-based REPL built on Node's `readline`, not a full-screen TUI. That
+is a choice: a TUI framework is a dependency tree in a process that can read your
+filesystem and run shell commands, and `readline` already gives line editing,
+history and correct signal handling. Panes and mouse support are not worth the
+supply chain.
 
 ## 4. What works, and what does not
 
 **Works:**
 
+- an **interactive session** — `serge` with no `-p` opens a conversation that
+  keeps its history, runs the brain's hooks on every turn, and ends when you end
+  it
 - streaming completions against any OpenAI-compatible endpoint, with a request
   timeout and bounded jittered retry on transient failures
 - **10 tools** — `Bash` `Read` `Write` `Edit` `MultiEdit` `NotebookEdit` `Glob`
@@ -175,14 +216,19 @@ They meet at a contract, not an API. If you pin, pin both to the same revision o
 - context compaction that keeps the first prompt and the working set
 - JSONL transcripts in the shape the brain's gates expect
 
+- **interactive sessions** — conversation state persists across turns, the
+  brain's hooks fire on every one of them, `Ctrl+C` stops a generation without
+  ending the session, and `/model` and `/mode` switch seat and permission mode
+  mid-conversation
+
 **Does not, stated plainly so nobody discovers it later:**
 
-- **headless only** (`-p`) — there is no interactive session yet
-- no MCP, no skills / commands / agents loading, no session resume
+- no MCP
+- no session resume — a new run starts a new conversation
+- no skills / commands / agents loading (`/help` lists the engine's own commands,
+  not the brain's slash commands)
 - no `Explore` tool
-
-For an interactive session today, point the brain at a Claude Code–derived
-engine instead: `./install.sh --engine /path/to/that`.
+- the session is a line-based REPL, not a full-screen TUI: no panes, no mouse
 
 ## 5. The contract
 
