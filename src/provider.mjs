@@ -54,8 +54,14 @@ export async function complete(opts) {
       if (attempt === MAX_ATTEMPTS || !isTransient(e, status)) throw e
       // 1s, 2s, 4s … each with up to 50% jitter.
       const base = 1000 * 2 ** (attempt - 1)
-      await sleep(base / 2 + Math.random() * base)
-      opts.onNotice?.(`retrying after ${status || 'network error'} (attempt ${attempt + 1}/${MAX_ATTEMPTS})`)
+      const wait = base / 2 + Math.random() * base
+      // Announced BEFORE the wait, not after. Announcing after meant the user
+      // sat through the silence with the spinner claiming the model was
+      // thinking, and only learned it had been a rate-limit once it was over —
+      // exactly when the information stopped being useful.
+      opts.onNotice?.(`${status || 'network error'} — retrying in ${(wait / 1000).toFixed(1)}s`
+        + ` (attempt ${attempt + 1}/${MAX_ATTEMPTS})`)
+      await sleep(wait)
     }
   }
   throw lastErr

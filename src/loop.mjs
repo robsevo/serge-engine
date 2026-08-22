@@ -187,6 +187,10 @@ export function createSession({
 
   let final = ''
   let stopHookActive = false
+  // Scoped to this user turn, not the session: globbing the same pattern again
+  // in a later turn is ordinary (the tree may have changed) — doing it three
+  // times inside one turn is a loop.
+  const repeatedCalls = new Map()
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     // Compaction happens BEFORE the request, never mid-flight: a summary built
@@ -325,6 +329,23 @@ export function createSession({
       } else if (post.context.length) {
         content = `${out.content}\n\n${post.context.join('\n')}`
       }
+
+      // A model that repeats a call it already made, verbatim, is looping —
+      // observed 2026-08-22, when a greeting produced `Glob {"pattern":"*"}`
+      // three times against $HOME, each round-trip costing a full model call on
+      // a slow seat. Serving the same bytes silently gives it no reason to stop,
+      // so say plainly that this already ran and what it returned.
+      const sig = call.name + '\u0000' + JSON.stringify(call.input ?? {})
+      const seenAt = repeatedCalls.get(sig)
+      if (seenAt !== undefined && !isError) {
+        content = `${content}\n\n--- REPEATED CALL ---\nThis exact call already ran `
+          + `earlier in this turn and returned the same thing. Repeating it cannot `
+          + `produce new information — use what you already have, or change the call.`
+        onNotice?.(`${call.name} repeated an identical call`, 'model')
+      } else {
+        repeatedCalls.set(sig, true)
+      }
+
       results.push({ id: call.id, content: boundResult(call.name, content), isError })
       onToolResult?.(call.name, content, isError)
     }
