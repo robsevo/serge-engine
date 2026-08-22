@@ -15,6 +15,12 @@ const DOTS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '�
 // animating four times a second is worse than no animation.
 const CAT = ['(=^·ω·^=)', '(=^·o·^=)', '(=^·ω·^=)', '(=^·-·^=)']
 
+/**
+ * The whole line sits in the wordmark's blue rather than a warning colour —
+ * thinking is the normal state of a turn, not something to flag.
+ */
+const BLUE = '#6EB4E6'
+
 export function Spinner({ frame, verb, seconds, tokens }) {
   const a = PULSE[frame % PULSE.length]
   const b = PULSE[(frame + 3) % PULSE.length]
@@ -22,8 +28,8 @@ export function Spinner({ frame, verb, seconds, tokens }) {
   const dot = DOTS[frame % DOTS.length]
   return (
     <Box marginTop={1}>
-      <Text color="#6EB4E6">{`${a} ${b} `}</Text>
-      <Text color="yellow">{`${dot} ${cat} ${verb}… ${seconds}s`}</Text>
+      <Text color={BLUE}>{`${a} ${b} `}</Text>
+      <Text color={BLUE}>{`${dot} ${cat} ${verb}… ${seconds}s`}</Text>
       {tokens ? <Text dimColor>{` · ${tokens}`}</Text> : null}
     </Box>
   )
