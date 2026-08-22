@@ -124,8 +124,6 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     seats,
     baseUrl: providerConfig(settings).baseUrl,
     cwd,
-    model: session.model,
-    mode: session.mode,
     commands: commands.size,
     skills: session.skills.size,
     agents: session.agents.size,

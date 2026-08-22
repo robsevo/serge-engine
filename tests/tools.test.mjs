@@ -298,7 +298,7 @@ try {
   const panel = renderStartup({
     seats: seatMap, baseUrl: 'http://localhost:4000/v1',
     cwd: '/very/deep/path/that/keeps/going/and/going/and/going/forever/and/ever',
-    mode: 'fullAccess', commands: 3, skills: 4, agents: 5, color: false,
+    commands: 3, skills: 4, agents: 5, color: false,
   })
   // Double-ruled box: ║ on the sides, ═ on the rules. Every framed line must be
   // the same printable width or a long value has pushed the border off.

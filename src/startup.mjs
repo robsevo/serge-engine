@@ -102,7 +102,7 @@ export function resolvePalette(name) {
 const W = 62
 
 export function renderStartup({
-  seats = null, baseUrl = '', cwd = '', mode = '',
+  seats = null, baseUrl = '', cwd = '',
   commands = 0, skills = 0, agents = 0, mcp = '', resumed = null,
   palette = null, color = true,
 } = {}) {
@@ -167,7 +167,7 @@ export function renderStartup({
 
   out.push(rule(`╠${'═'.repeat(W - 2)}╣`, GRAD))
 
-  const sL = mode === 'fullAccess' ? 'yolo · ready' : 'ready'
+  const sL = 'ready'
   const sRow = `  ${col(...(isLocal ? GREEN : ACCENT))}●${rst} ${dm}${col(...DIMCOL)}${sL}${rst}`
     + `    ${dm}${col(...DIMCOL)}type ${rst}${col(...ACCENT)}/help${rst}${dm}${col(...DIMCOL)} to begin${rst}`
   out.push(boxRow(sRow, `  ● ${sL}    type /help to begin`.length))
