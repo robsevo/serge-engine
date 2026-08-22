@@ -24,6 +24,7 @@ import { providerConfig, loadSettings, configDir, VERSION } from './config.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { MODES } from './permissions.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
+import { catalog } from './commands.mjs'
 import { createSpinner, dotPulse } from './spinner.mjs'
 import { renderStatusLine } from './statusline.mjs'
 import { renderStartup, renderHeader } from './startup.mjs'
@@ -291,9 +292,9 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     prompt: `${C.c}❯${C.x} `,
     historySize: 500,
     completer(line) {
-      const cmds = ['/help', '/seats', '/skills', '/agents', '/mcp', '/model', '/mode',
-                    '/clear', '/cost', '/exit',
-                    ...[...commands.keys()].map((c) => `/${c}`)].sort()
+      // The catalogue is shared with the Ink front-end, so a command added in
+      // one place is offered in both rather than only where it was written.
+      const cmds = catalog(commands).map((c) => '/' + c.name)
       const hits = cmds.filter((c) => c.startsWith(line))
       return [hits.length ? hits : (line.startsWith('/') ? cmds : []), line]
     },

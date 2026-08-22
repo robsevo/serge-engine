@@ -10,13 +10,14 @@ import { POSES } from './Clawd.jsx'
 import { renderStatusLine } from '../statusline.mjs'
 import { MODES } from '../permissions.mjs'
 import { loadSpinnerConfig } from '../spinner.mjs'
+import { dispatch } from '../commands.mjs'
 
 /** Tools whose calls are the agent's own plumbing, not work the reader follows. */
 const QUIET_TOOLS = new Set(['Skill'])
 const CYCLE = ['default', 'acceptEdits', 'plan', 'fullAccess']
 const COMPACT_AT = Number(process.env.SERGE_COMPACT_AT || 400_000)
 
-export function App({ session, settings, cwd, version, commands, onExit }) {
+export function App({ session, settings, cwd, version, commands, seats, mcp, sessions, onExit }) {
   // Completed rows go in <Static>: Ink writes them once and never touches them
   // again, so the transcript scrolls normally and only the live region redraws.
   const [done, setDone] = useState([])
@@ -66,6 +67,28 @@ export function App({ session, settings, cwd, version, commands, onExit }) {
   const submit = useCallback(async (text) => {
     history.current.push(text)
     push({ kind: 'user', text })
+
+    // A slash command is answered here, by the same dispatcher the readline
+    // front-end uses. Only a brain-authored command becomes a prompt; the rest
+    // never reach the model, which is the point — `/cost` is a question about
+    // the session, and asking the model would spend the tokens it reports.
+    const cmd = dispatch(text, { session, seats, mcp, commands, sessions })
+    if (cmd) {
+      if (cmd.exit) { onExit?.(); exit(); return }
+      if (cmd.unknown) {
+        push({ kind: 'notice', text: `unknown command /${cmd.unknown} — try /help`, tone: 'warn' })
+        return
+      }
+      if (cmd.lines) {
+        push({ kind: 'text', text: cmd.lines.join('\n'), tone: cmd.tone })
+        if (cmd.mode) setMode(cmd.mode)
+        if (cmd.cleared) setDone([])
+        refreshStatus()
+        return
+      }
+      if (cmd.prompt) { text = cmd.prompt }   // a brain command: send its body
+    }
+
     setBusy(true)
     startRef.current = Date.now()
     setFrame(0)
@@ -89,7 +112,7 @@ export function App({ session, settings, cwd, version, commands, onExit }) {
       abortRef.current = null
       refreshStatus()
     }
-  }, [session, push, refreshStatus])
+  }, [session, push, refreshStatus, seats, mcp, commands, sessions, onExit, exit])
 
   // The session reports into the transcript through these.
   useEffect(() => {
@@ -157,6 +180,7 @@ export function App({ session, settings, cwd, version, commands, onExit }) {
         onInterrupt={interrupt}
         busy={busy}
         history={history.current}
+        commands={commands}
       />
       <Rule />
       <StatusBar status={status} mode={mode} ctx={ctx} />

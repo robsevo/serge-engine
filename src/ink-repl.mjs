@@ -12,6 +12,7 @@ import { createSession } from './loop.mjs'
 import { loadSettings, providerConfig, configDir, VERSION } from './config.mjs'
 import { loadSeats, checkSeat, renderStartup } from './seats-startup.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
+import { listSessions } from './sessions.mjs'
 import { App } from './ui/App.js'
 
 export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFrom = null, resumeInfo = null, forkParent = null }) {
@@ -51,7 +52,8 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
 
   const app = render(
     React.createElement(App, {
-      session, settings, cwd, version: VERSION, commands,
+      session, settings, cwd, version: VERSION, commands, seats, mcp,
+      sessions: listSessions(cwd, 20),
     }),
     { exitOnCtrlC: false },
   )
