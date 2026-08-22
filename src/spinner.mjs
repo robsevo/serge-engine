@@ -29,7 +29,11 @@ const DOTS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '�
  * Cat frames, matching `spinnerStyle: "cat"`. Two-phase tail and ear movement —
  * enough motion to read as alive, few enough frames to stay legible at 100ms.
  */
-const CAT = ['(=^·ω·^=)', '(=^·ェ·^=)', '(=^·ω·^=)', '(=^·-·^=)']
+// Mouth only, and only from characters that are in essentially every terminal
+// font. The katakana `ェ` looked right in one font and rendered as a replacement
+// box in the user's — a broken glyph animating four times a second is worse than
+// no animation at all.
+const CAT = ['(=^·ω·^=)', '(=^·o·^=)', '(=^·ω·^=)', '(=^·-·^=)']
 
 const STYLES = {
   cat: (i) => `${DOTS[i % DOTS.length]} ${CAT[Math.floor(i / 3) % CAT.length]}`,

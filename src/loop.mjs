@@ -177,7 +177,7 @@ export function createSession({
 
     const ups = runHooks('UserPromptSubmit', { ...base(), prompt }, undefined, settings)
     if (ups.blocked) {
-      onNotice?.(`blocked: ${ups.reason}`)
+      onNotice?.(`blocked: ${ups.reason}`, 'user')
       return { text: '', blocked: true, reason: ups.reason }
     }
 
@@ -196,10 +196,10 @@ export function createSession({
       runHooks('PreCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
       const r = await compact({ messages, complete, provider })
       if (r.failed) {
-        onNotice?.('compaction failed — continuing uncompacted')
+        onNotice?.('compaction failed — continuing uncompacted', 'user')
       } else {
         messages = r.messages
-        onNotice?.(`compacted context (-${r.droppedChars} chars)`)
+        onNotice?.(`compacted context (-${r.droppedChars} chars)`, 'user')
       }
       runHooks('PostCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
     }
@@ -235,7 +235,7 @@ export function createSession({
 
       if (stop.blocked) {
         stopHookActive = true
-        onNotice?.(`stop hook: ${stop.reason}`)
+        onNotice?.(`stop hook: ${stop.reason}`, 'model')
         messages.push({ role: 'user', content: stop.reason })
         continue
       }
@@ -262,7 +262,7 @@ export function createSession({
       const pre = runHooks('PreToolUse', payload, call.name, settings)
       if (pre.blocked) {
         results.push({ id: call.id, content: `Blocked by PreToolUse hook: ${pre.reason}`, isError: true })
-        onNotice?.(`denied ${call.name}: ${pre.reason}`)
+        onNotice?.(`denied ${call.name}: ${pre.reason}`, 'user')
         runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: pre.reason },
           'permission_prompt', settings)
         continue
@@ -290,7 +290,7 @@ export function createSession({
         // just answered, and telling them how to edit settings.json is noise.
         const detail = verdict.reason + (!onAsk && verdict.hint ? ` ${verdict.hint}` : '')
         results.push({ id: call.id, content: `Permission denied: ${detail}`, isError: true })
-        onNotice?.(`denied ${call.name}: ${detail}`)
+        onNotice?.(`denied ${call.name}: ${detail}`, 'user')
         runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: verdict.reason },
           'permission_prompt', settings)
         runHooks('PostToolUseFailure',
@@ -319,7 +319,7 @@ export function createSession({
       if (post.blocked) {
         content = `${out.content}\n\n--- BLOCKED BY PostToolUse HOOK ---\n${post.reason}`
         isError = true
-        onNotice?.(`post-hook blocked ${call.name}: ${String(post.reason).split('\n')[0]}`)
+        onNotice?.(`post-hook blocked ${call.name}: ${String(post.reason).split('\n')[0]}`, 'model')
       } else if (post.context.length) {
         content = `${out.content}\n\n${post.context.join('\n')}`
       }
@@ -332,7 +332,7 @@ export function createSession({
     }
   }
 
-    onNotice?.(`stopped after ${MAX_TURNS} turns without a final answer`)
+    onNotice?.(`stopped after ${MAX_TURNS} turns without a final answer`, 'user')
     return { text: final, blocked: false, exhausted: true }
   }
 

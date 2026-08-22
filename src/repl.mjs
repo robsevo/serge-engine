@@ -28,6 +28,7 @@ import { createSpinner } from './spinner.mjs'
 import { renderStatusLine } from './statusline.mjs'
 import { renderStartup, renderHeader } from './startup.mjs'
 import { clawd, MOTION } from './clawd.mjs'
+import { homedir } from 'node:os'
 import { MODES as ALL_MODES } from './permissions.mjs'
 import { createPane, fit, visible } from './pane.mjs'
 
@@ -69,15 +70,19 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   const spinner = createSpinner({ settings })
   // Two reserved rows at the bottom: a rule, and a live status line. Output
   // scrolls above them and scrollback is untouched — see pane.mjs.
-  // Four rows: a rule, then Clawd on the left with the status stacked beside
-  // him. He lives in the PANE rather than the header because the pane repaints —
-  // scrollback does not, and a mascot that only moves if you scroll to him is
-  // not moving.
-  const pane = createPane({ rows: 4 })
+  // Six rows, pinned: a rule, the identity block (Clawd beside name / mode /
+  // cwd), then the status line and the permission mode.
+  //
+  // The whole block lives in the PANE rather than being printed once, because
+  // scrollback does not repaint — a mascot that only moves if you scroll back to
+  // him is not moving, and an identity block that scrolls away stops answering
+  // "who am I talking to" the moment the transcript gets long.
+  const pane = createPane({ rows: 6 })
   let tickCount = 0
   // The status line spawns a process, so it is refreshed per TURN, not per
   // animation frame — a 100ms spinner tick would fork ten times a second.
   let statusCache = ''
+  const shortCwd = cwd.startsWith(homedir()) ? `~${cwd.slice(homedir().length)}` : cwd
   let streaming = false
   let paneTimer = null
   // Set while a permission prompt owns the terminal, so the pane's repaint timer
@@ -109,30 +114,36 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
         })
       : clawd({ color: Boolean(stdout.isTTY) })
 
-    const top = spinning
-      ? `${C.y}${spinner.frame()}${C.x}`
-      : `${C.g}●${C.x} ${C.dim}ready${C.x}`
-    const status = statusCache || `${C.dim}${session.model}  ${session.turns} turn(s)${C.x}`
     const mode = session.mode
     const marker = mode === 'plan' ? `${C.y}⏸${C.x}` : `${C.c}▶▶${C.x}`
-    const modeRow = `${marker} ${C.dim}${MODE_LABEL[mode] ?? mode} (shift+tab to cycle)${C.x}`
-    const meter = `${C.dim}${tok ? `${fmt(tok)} tok` : ''}${C.x}`
 
-    // Clawd is 8 columns wide at his widest row; pad the narrow rows so the
-    // text column starts at the same place on all three.
-    const CW = 8
+    // While a turn runs the first identity line carries the spinner instead of
+    // the version — that is the line the eye is already on.
+    const identity = [
+      spinning
+        ? `${C.y}${spinner.frame()}${C.x}`
+        : `${C.b}${C.c}Serge${C.x}${C.dim} v${VERSION}${C.x}`,
+      `${C.dim}Hive-mode${settings.effortLevel ? ` with ${settings.effortLevel} effort` : ''}${C.x}`,
+      `${C.dim}${shortCwd}${C.x}`,
+    ]
+
+    const meter = `${C.dim}${tok ? `${fmt(tok)} tok · ` : ''}${session.turns} turn${session.turns === 1 ? '' : 's'}${C.x}`
+
+    // Clawd is 8 columns at his widest; pad the narrow rows so the text column
+    // starts in the same place on all three.
     const beside = (i, text) => {
       const a = art[i] ?? ''
-      const padding = ' '.repeat(Math.max(0, CW - visible(a)))
-      return ` ${a}${padding}  ${text}`
+      return ` ${a}${' '.repeat(Math.max(0, 8 - visible(a)))}  ${text}`
     }
-    const gap = Math.max(1, cols - visible(beside(0, top)) - visible(meter) - 1)
+    const gap = Math.max(1, cols - visible(beside(0, identity[0])) - visible(meter) - 1)
 
     pane.set([
       `${C.dim}${'─'.repeat(Math.max(0, cols))}${C.x}`,
-      beside(0, top) + ' '.repeat(gap) + meter,
-      beside(1, status),
-      beside(2, modeRow),
+      beside(0, identity[0]) + ' '.repeat(gap) + meter,
+      beside(1, identity[1]),
+      beside(2, identity[2]),
+      ` ${statusCache || `${C.dim}${session.model}${C.x}`}`,
+      ` ${marker} ${C.dim}${MODE_LABEL[mode] ?? mode} (shift+tab to cycle)${C.x}`,
     ])
   }
 
@@ -156,7 +167,18 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       if (!streaming) { spinner.stop(); streaming = true }
       stdout.write(t)
     },
-    onNotice: (m) => say(`  ${C.dim}└${C.x} ${C.dim}${m}${C.x}\n`),
+    // Notices tagged 'model' are gate feedback addressed to the agent, not to
+    // the reader — printing them pastes a paragraph of instructions into the
+    // transcript for something the model is already handling. A one-line marker
+    // says a gate fired; the text goes where it was aimed.
+    onNotice: (m, kind = 'user') => {
+      if (kind === 'model') {
+        const what = String(m).split(':')[0]
+        say(`  ${C.dim}↺ ${what} — sent back${C.x}\n`)
+        return
+      }
+      say(`  ${C.dim}└ ${m}${C.x}\n`)
+    },
     onTool: (name, input) => {
       const arg = input?.command || input?.file_path || input?.pattern
         || input?.query || input?.name || ''
@@ -183,13 +205,9 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       : null,
     color: Boolean(stdout.isTTY),
   }))
-  stdout.write(renderHeader({
-    version: VERSION,
-    effort: settings.effortLevel || '',
-    cwd,
-    sprite: false,          // he lives in the pane, where he can move
-    color: Boolean(stdout.isTTY),
-  }))
+  // No printed header: the pane carries the identity block, and carries it live.
+  // Printing a second copy into scrollback would put a frozen Clawd on screen
+  // beside the moving one.
   statusCache = renderStatusLine({
     settings, sessionId: session.sessionId, cwd, model: session.model, usage: session.usage,
   })
