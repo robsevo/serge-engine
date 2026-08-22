@@ -70,9 +70,12 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   const pane = createPane({ rows: 2 })
   let streaming = false
   let paneTimer = null
+  // Set while a permission prompt owns the terminal, so the pane's repaint timer
+  // does not overwrite the question between asking and the keypress.
+  let prompting = false
 
   const paintPane = (spinning = false) => {
-    if (!pane.enabled) return
+    if (!pane.enabled || prompting) return
     const cols = stdout.columns || 80
     const u = session.usage
     const tok = u.prompt + u.completion
@@ -112,12 +115,17 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       if (!streaming) { spinner.stop(); streaming = true }
       stdout.write(t)
     },
-    onNotice: (m) => say(`${C.dim}  · ${m}${C.x}\n`),
+    onNotice: (m) => say(`  ${C.dim}└${C.x} ${C.dim}${m}${C.x}\n`),
     onTool: (name, input) => {
       const arg = input?.command || input?.file_path || input?.pattern
         || input?.query || input?.name || ''
-      say(`${C.dim}  ⚒ ${name}${arg ? `  ${String(arg).replace(/\s+/g, ' ').slice(0, 68)}` : ''}${C.x}\n`)
+      // `●` rather than a pictograph: glyphs outside the common ranges fall back
+      // to a replacement box in plenty of terminal fonts, and a broken marker on
+      // every tool call is worse than a plain one.
+      say(`  ${C.c}●${C.x} ${C.b}${name}${C.x}`
+        + `${arg ? `  ${C.dim}${String(arg).replace(/\s+/g, ' ').slice(0, 68)}${C.x}` : ''}\n`)
     },
+    onAsk: askPermission,
   })
 
   stdout.write(renderStartup({
@@ -159,9 +167,62 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   let closing = false
 
   const prompt = () => { if (!closing) rl.prompt() }
+  // stdin reaching EOF closes readline without going through /exit, so `closing`
+  // alone is not enough to know whether resume/prompt are still legal.
+  rl.on('close', () => { closing = true })
 
   // readline's own SIGINT handling would kill the process. Take it over so a
   // Ctrl+C can mean "stop this turn" without meaning "throw away the session".
+  /**
+   * Ask for one tool call, on the terminal the user is already sitting at.
+   *
+   * Raw mode for a single keypress: a permission prompt that needs Enter is one
+   * more thing between the user and the answer, and the answer is one character.
+   * readline is paused for the duration so it does not also consume the key.
+   */
+  async function askPermission({ tool, input, reason }) {
+    if (!stdin.isTTY) return 'no'
+    const subject = String(input?.command || input?.file_path || input?.pattern
+      || input?.query || input?.name || '').replace(/\s+/g, ' ').slice(0, 68)
+
+    // The pane repaints on a timer; leaving it running would overwrite the
+    // prompt between the question and the keypress.
+    const wasPrompting = prompting
+    prompting = true
+    stdout.write(`\n  ${C.y}${reason}${C.x}\n`)
+    if (subject) stdout.write(`  ${C.dim}${tool}${C.x}  ${subject}\n`)
+    stdout.write(`  ${C.b}y${C.x} ${C.dim}once${C.x}   ${C.b}a${C.x} ${C.dim}always ${tool} this session${C.x}`
+      + `   ${C.b}n${C.x} ${C.dim}no${C.x}  ${C.dim}›${C.x} `)
+
+    const wasRaw = stdin.isRaw
+    rl.pause()
+    if (!wasRaw) stdin.setRawMode(true)
+    stdin.resume()
+
+    const key = await new Promise((resolve) => {
+      const onKey = (buf) => {
+        stdin.off('data', onKey)
+        // FIRST character only. Raw mode delivers one keystroke at a time from a
+        // terminal, but piped input arrives as a whole line — comparing the
+        // whole chunk to 'y' then fails every answer.
+        resolve(String(buf).slice(0, 1))
+      }
+      stdin.on('data', onKey)
+    })
+
+    if (!wasRaw) stdin.setRawMode(false)
+    const answer = key === 'y' || key === 'Y' ? 'yes'
+      : key === 'a' || key === 'A' ? 'always'
+      : 'no'
+    const label = { yes: `${C.g}allowed once`, always: `${C.g}always for ${tool}`, no: `${C.r}declined` }[answer]
+    stdout.write(`${label}${C.x}\n\n`)
+    prompting = wasPrompting
+    // Ctrl+C at the prompt means "stop the whole turn", not just "decline this
+    // one call" — otherwise the model retries and asks again immediately.
+    if (key === '\u0003' && generating) generating.abort()
+    return answer
+  }
+
   rl.on('SIGINT', () => {
     if (generating) {
       generating.abort()

@@ -88,6 +88,42 @@ const CASES = [
     { tool: 'Bash', input: { command: 'anything' }, hookDecision: 'ask' }, 'deny'],
 ]
 
+/**
+ * `ask` cases must be distinguishable from hard denials.
+ *
+ * Both return allow:false, but only one of them a human can resolve. If they
+ * are not separable the interactive session cannot know when to prompt, and it
+ * refuses things the user is sitting right there to approve — which is exactly
+ * what happened before this was checked.
+ */
+const ASK_CASES = [
+  ['default Bash is ASKABLE, not a hard deny',
+   { tool: 'Bash', input: { command: 'ls' } }, true],
+  ['a dangerous command is askable', { tool: 'Bash', input: { command: 'sudo x' } }, true],
+  ['outside the workspace is askable',
+   { tool: 'Write', input: { file_path: '/etc/x' } }, true],
+  ['a deny RULE is not askable — no answer makes it allowed',
+   { tool: 'Bash', input: { command: 'rm f' }, settings: settingsWith({ deny: ['Bash'] }) }, false],
+  ['plan mode is not askable — the plan has to be accepted first',
+   { tool: 'Write', input: { file_path: `${WS}/a.ts` }, mode: 'plan' }, false],
+  ['a hook deny is not askable', { tool: 'Bash', input: {}, hookDecision: 'deny' }, false],
+]
+
+function runAsk() {
+  const failures = []
+  for (const [name, args, shouldAsk] of ASK_CASES) {
+    const v = checkPermission({ cwd: WS, settings: settingsWith({}), ...args })
+    const isAsk = v.rule === 'ask'
+    if (isAsk !== shouldAsk) {
+      failures.push({ name, expected: shouldAsk ? 'ask' : 'hard deny', got: v.rule || 'allow', reason: v.reason })
+    }
+    // The hint is for the caller with nobody to ask; an askable verdict must
+    // carry one so headless can still tell the user how to permit it.
+    if (isAsk && !v.hint) failures.push({ name: name + ' [carries a hint]', expected: 'hint', got: 'none', reason: '' })
+  }
+  return failures
+}
+
 function run(checker) {
   const failures = []
   for (const [name, args, expected] of CASES) {
@@ -101,7 +137,7 @@ function run(checker) {
 const selfTest = process.argv.includes('--self-test')
 
 if (!selfTest) {
-  const failures = run(checkPermission)
+  const failures = run(checkPermission).concat(runAsk())
   for (const [name, , expected] of CASES) {
     if (!failures.find((f) => f.name === name)) console.log(`  ok    ${name} → ${expected}`)
   }
@@ -109,7 +145,11 @@ if (!selfTest) {
     console.log(`  FAIL  ${f.name} — expected ${f.expected}, got ${f.got}`)
     console.log(`        ${String(f.reason).split('\n')[0]}`)
   }
-  console.log(`\n  ${CASES.length - failures.length}/${CASES.length} passed`)
+  const total = CASES.length + ASK_CASES.length
+  for (const [name] of ASK_CASES) {
+    if (!failures.find((f) => f.name.startsWith(name))) console.log(`  ok    ${name}`)
+  }
+  console.log(`\n  ${total - failures.length}/${total} passed`)
   process.exit(failures.length ? 1 : 0)
 } else {
   // A gate that is not there must make this suite fail.

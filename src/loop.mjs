@@ -67,7 +67,7 @@ function boundResult(name, content) {
  * the turn, which is what makes the second prompt aware of the first.
  */
 export function createSession({
-  cwd, model, onToken, onNotice, onTool, permissionMode = 'default',
+  cwd, model, onToken, onNotice, onTool, onAsk, permissionMode = 'default',
   mcp = null, resumeFrom = null, forkParent = null, loadBrain = true,
 }) {
   const settings = loadSettings()
@@ -84,6 +84,10 @@ export function createSession({
   let messages = []
   let mode = permissionMode
   let started = false
+  // "always allow" answers, scoped to this session. Kept here rather than
+  // written to settings: a decision made to get one turn moving should not
+  // quietly become permanent policy on disk.
+  const sessionAllow = new Set()
   // Cumulative across the session, so the status line reflects the conversation
   // rather than the last request.
   const usage = { prompt: 0, completion: 0, requests: 0 }
@@ -264,13 +268,29 @@ export function createSession({
         continue
       }
 
-      const verdict = checkPermission({
-        tool: call.name, input: call.input, mode, settings, cwd,
-        hookDecision: pre.decision, hookReason: pre.reason,
-      })
+      let verdict = sessionAllow.has(call.name)
+        ? { allow: true, decision: 'allow', reason: 'allowed for this session' }
+        : checkPermission({
+            tool: call.name, input: call.input, mode, settings, cwd,
+            hookDecision: pre.decision, hookReason: pre.reason,
+          })
+
+      // `ask` means "a human could answer this". With someone at a terminal,
+      // ask them — resolving it to a refusal is only correct when there is
+      // nobody to ask, which was true headless and is not true here.
+      if (!verdict.allow && verdict.rule === 'ask' && onAsk) {
+        const answer = await onAsk({ tool: call.name, input: call.input, reason: verdict.reason })
+        if (answer === 'always') { sessionAllow.add(call.name); verdict = { allow: true, decision: 'allow', reason: 'allowed for this session' } }
+        else if (answer === 'yes') verdict = { allow: true, decision: 'allow', reason: 'allowed once' }
+        else verdict = { allow: false, decision: 'deny', reason: 'declined', rule: 'user' }
+      }
+
       if (!verdict.allow) {
-        results.push({ id: call.id, content: `Permission denied: ${verdict.reason}`, isError: true })
-        onNotice?.(`denied ${call.name}: ${verdict.reason}`)
+        // The hint only helps where nobody could be asked. In a session the user
+        // just answered, and telling them how to edit settings.json is noise.
+        const detail = verdict.reason + (!onAsk && verdict.hint ? ` ${verdict.hint}` : '')
+        results.push({ id: call.id, content: `Permission denied: ${detail}`, isError: true })
+        onNotice?.(`denied ${call.name}: ${detail}`)
         runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: verdict.reason },
           'permission_prompt', settings)
         runHooks('PostToolUseFailure',
