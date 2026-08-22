@@ -40,6 +40,9 @@ const C = stdout.isTTY
 /** 1234 -> 1.2k. Token counts are read at a glance, not audited. */
 const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
 
+/** Tools whose calls are the agent's own plumbing, not work the reader follows. */
+const QUIET_TOOLS = new Set(['Skill'])
+
 const HELP = `
   ${C.b}Commands${C.x}
     /help              this
@@ -86,6 +89,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   const COMPACT_AT = Number(process.env.SERGE_COMPACT_AT || 400_000)
   let streaming = false
   let paneTimer = null
+  let inlineWidth = 0
   let atLineStart = true
   let firstLine = true
   // Set while a permission prompt owns the terminal, so the pane's repaint timer
@@ -103,7 +107,6 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   // A pulse on the conversation's own line, so the wait shows up where the
   // answer will appear rather than only at the bottom of the screen. Rewritten
   // in place with \r and erased the moment real text arrives.
-  let inlineWidth = 0
   const clearInline = () => {
     if (!inlineWidth) return
     stdout.write(`\r${' '.repeat(inlineWidth)}\r`)
@@ -176,6 +179,9 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   // With a pane the spinner never touches the screen, so notices and tool lines
   // just print — the pane repaints itself on its own timer.
   const say = (line) => {
+    // The inline pulse owns the current line; anything printed while it is up
+    // must erase it first or the two collide mid-line.
+    clearInline()
     if (!pane.enabled && spinner.active) { spinner.stop(); stdout.write(line); spinner.start(); return }
     stdout.write(line)
   }
@@ -221,6 +227,10 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       say(`  ${C.dim}└  ${m}${C.x}\n`)
     },
     onTool: (name, input) => {
+      // Loading a skill is the model fetching its own instructions. Showing it —
+      // and then dumping "# Skill: … +51 lines" underneath — puts internal
+      // machinery in front of the reader instead of the work.
+      if (QUIET_TOOLS.has(name)) return
       const arg = input?.command || input?.file_path || input?.pattern
         || input?.query || input?.name || ''
       // `● Name(args)` — BLACK_CIRCLE, bold name, args parenthesised. The bullet
@@ -232,6 +242,8 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     // never returned; the full output is in the transcript, so this only has to
     // say what happened.
     onToolResult: (name, content, isError) => {
+      // An error still surfaces: a skill that failed to load changes the answer.
+      if (QUIET_TOOLS.has(name) && !isError) return
       const text = String(content ?? '').trim()
       const lines = text ? text.split('\n').filter((l) => l.trim()) : []
       const head = (lines[0] ?? '(no output)').replace(/\s+/g, ' ').slice(0, 66)
