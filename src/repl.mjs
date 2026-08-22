@@ -28,17 +28,23 @@ import { providerConfig, loadSettings, configDir } from './config.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { MODES } from './permissions.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
+import { createSpinner } from './spinner.mjs'
+import { renderStatusLine } from './statusline.mjs'
 
 const C = stdout.isTTY
   ? { dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m',
       c: '\x1b[36m', x: '\x1b[0m' }
   : { dim: '', b: '', g: '', y: '', r: '', c: '', x: '' }
 
+/** 1234 -> 1.2k. Token counts are read at a glance, not audited. */
+const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+
 const HELP = `
   ${C.b}Commands${C.x}
     /help              this
     /seats             model seats the router has configured
     /skills            skills the model can load on demand
+    /agents            named subagents Task can spawn, and their seats
     /mcp               MCP servers and their tool counts
     /model [seat]      show or switch the seat for this session
     /mode [name]       show or switch permission mode
@@ -60,14 +66,34 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   // expands them rather than defining them.
   const commands = loadCommands()
 
+  const spinner = createSpinner({ settings })
+  let streaming = false
+
+  // The spinner owns the screen until the first token, then gets out of the way.
+  // Notices and tool lines have to clear it too, or they print into its row.
+  const say = (line) => {
+    const wasActive = spinner.active
+    if (wasActive) spinner.stop()
+    stdout.write(line)
+    if (wasActive && !streaming) spinner.start()
+  }
+
   const session = createSession({
     cwd,
     model,
     permissionMode: permissionMode || 'default',
     mcp,
     resumeFrom,
-    onToken: (t) => stdout.write(t),
-    onNotice: (m) => stdout.write(`${C.dim}  · ${m}${C.x}\n`),
+    onToken: (t) => {
+      if (!streaming) { spinner.stop(); streaming = true }
+      stdout.write(t)
+    },
+    onNotice: (m) => say(`${C.dim}  · ${m}${C.x}\n`),
+    onTool: (name, input) => {
+      const arg = input?.command || input?.file_path || input?.pattern
+        || input?.query || input?.name || ''
+      say(`${C.dim}  ⚒ ${name}${arg ? `  ${String(arg).replace(/\s+/g, ' ').slice(0, 68)}` : ''}${C.x}\n`)
+    },
   })
 
   const banner = [
@@ -94,7 +120,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     prompt: `${C.c}❯${C.x} `,
     historySize: 500,
     completer(line) {
-      const cmds = ['/help', '/seats', '/skills', '/mcp', '/model', '/mode',
+      const cmds = ['/help', '/seats', '/skills', '/agents', '/mcp', '/model', '/mode',
                     '/clear', '/cost', '/exit',
                     ...[...commands.keys()].map((c) => `/${c}`)].sort()
       const hits = cmds.filter((c) => c.startsWith(line))
@@ -163,9 +189,13 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
         stdout.write(`${C.g}  conversation cleared${C.x} ${C.dim}(the transcript still has it)${C.x}\n`)
         return true
 
-      case '/cost':
-        stdout.write(`  ${session.turns} turn(s)\n  ${C.dim}${session.transcriptPath}${C.x}\n`)
+      case '/cost': {
+        const u = session.usage
+        stdout.write(`  ${session.turns} turn(s) · ${u.requests} request(s)\n`
+          + `  ${fmt(u.prompt)} in · ${fmt(u.completion)} out · ${fmt(u.prompt + u.completion)} total\n`
+          + `  ${C.dim}${session.transcriptPath}${C.x}\n`)
         return true
+      }
 
       case '/skills': {
         if (!session.skills.size) { stdout.write('  (no skills in this config dir)\n'); return true }
@@ -174,6 +204,15 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
             + `${(sk.whenToUse || sk.description).replace(/\s+/g, ' ').slice(0, 96)}${C.x}\n`)
         }
         stdout.write(`${C.dim}  the model loads one itself with the Skill tool${C.x}\n`)
+        return true
+      }
+
+      case '/agents': {
+        if (!session.agents.size) { stdout.write('  (no agents/ in this config dir)\n'); return true }
+        for (const a of [...session.agents.values()].sort((x, y) => x.name.localeCompare(y.name))) {
+          stdout.write(`  ${C.b}${a.name.padEnd(16)}${C.x}${C.c}${(a.model || 'session seat').padEnd(15)}${C.x}`
+            + `${C.dim}${(a.description || '').replace(/\s+/g, ' ').slice(0, 62)}${C.x}\n`)
+        }
         return true
       }
 
@@ -220,6 +259,15 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     // Pause input while the model streams: keystrokes typed mid-generation
     // would otherwise interleave with the output and land in the next prompt.
     rl.pause()
+    streaming = false
+    const before = session.usage
+    spinner.start()
+    const tick = setInterval(() => {
+      const u = session.usage
+      const t = u.prompt + u.completion - before.prompt - before.completion
+      if (t > 0) spinner.update(`${fmt(t)} tok`)
+    }, 1000)
+    tick.unref?.()
     try {
       const res = await session.send(toSend, { signal: generating.signal })
       if (res.blocked) {
@@ -233,9 +281,19 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       if (!aborted) stdout.write(`\n${C.r}  error: ${e?.message ?? e}${C.x}\n`)
       else stdout.write('\n')
     } finally {
+      clearInterval(tick)
+      spinner.stop()
       generating = null
       if (!closing) rl.resume()
     }
+
+    const status = renderStatusLine({
+      settings, sessionId: session.sessionId, cwd, model: session.model, usage: session.usage,
+    })
+    const u = session.usage
+    const spent = (u.prompt + u.completion) - (before.prompt + before.completion)
+    stdout.write(`${C.dim}  ${status || `${session.model}  ${session.turns} turn(s)`}`
+      + `${spent > 0 ? `  +${fmt(spent)} tok` : ''}  ${spinner.elapsed().toFixed(1)}s${C.x}\n\n`)
     prompt()
   }
 

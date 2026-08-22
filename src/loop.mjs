@@ -17,8 +17,10 @@ import { toolSchemas, runTool, SUBAGENT_TOOLS } from './tools/index.mjs'
 import { complete } from './provider.mjs'
 import { checkPermission } from './permissions.mjs'
 import { shouldCompact, compact, size } from './compact.mjs'
-import { loadSkills, skillIndex } from './brain.mjs'
+import { loadSkills, skillIndex, loadAgents } from './brain.mjs'
 import { makeSkillTool } from './tools/skill.mjs'
+import { makeTaskTool } from './tools/task.mjs'
+import { checkSeat } from './seats.mjs'
 import { replay } from './sessions.mjs'
 
 const MAX_TURNS = 40
@@ -65,7 +67,7 @@ function boundResult(name, content) {
  * the turn, which is what makes the second prompt aware of the first.
  */
 export function createSession({
-  cwd, model, onToken, onNotice, permissionMode = 'default',
+  cwd, model, onToken, onNotice, onTool, permissionMode = 'default',
   mcp = null, resumeFrom = null, loadBrain = true,
 }) {
   const settings = loadSettings()
@@ -80,18 +82,36 @@ export function createSession({
   let messages = []
   let mode = permissionMode
   let started = false
+  // Cumulative across the session, so the status line reflects the conversation
+  // rather than the last request.
+  const usage = { prompt: 0, completion: 0, requests: 0 }
 
   // Skills are session-scoped: the index goes into context once, and the Skill
   // tool that reads a body is built against THIS session's set.
   const skills = loadBrain ? loadSkills() : new Map()
-  const sessionTools = skills.size ? { Skill: makeSkillTool(skills) } : {}
+  const agents = loadBrain ? loadAgents() : new Map()
+
+  // A definition naming a seat the router does not have would fail inside a
+  // subagent nobody is watching, so it is caught here and reported once.
+  for (const a of agents.values()) {
+    if (!a.model) continue
+    const v = checkSeat(a.model)
+    if (!v.ok) {
+      onNotice?.(`agent ${a.name}: ${v.reason.split('\n')[0]} — it will run on the session seat`)
+      a.model = null
+    }
+  }
+
+  const sessionTools = {
+    ...(skills.size ? { Skill: makeSkillTool(skills) } : {}),
+    ...(agents.size ? { Task: makeTaskTool(agents) } : {}),
+  }
+  const asSchema = (t) => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  })
   const extraSchemas = [
-    ...(skills.size
-      ? [{ type: 'function',
-           function: { name: 'Skill',
-                       description: sessionTools.Skill.description,
-                       parameters: sessionTools.Skill.parameters } }]
-      : []),
+    ...(skills.size ? [asSchema(sessionTools.Skill)] : []),
     ...(mcp?.tools ?? []),
   ]
 
@@ -105,20 +125,29 @@ export function createSession({
   }
 
   /** Subagent spawner, injected into the Task tool (see tools/task.mjs). */
-  const spawnSubagent = async ({ prompt: brief, label }) => {
+  const spawnSubagent = async ({ prompt: brief, label, agentType = null, tools = null, maxTurns = null }) => {
     const subId = randomUUID()
-    runHooks('SubagentStart', { ...base(), subagent_id: subId, subagent_type: label, prompt: brief },
-      label, settings)
+    const agent = agentType ? agents.get(agentType) : null
+    if (agentType && !agent) {
+      return { error: `unknown subagent_type "${agentType}". Available: ${[...agents.keys()].join(', ')}` }
+    }
+    // The hook matcher is the AGENT TYPE where there is one: the brain matches
+    // SubagentStop on `scout|researcher|Explore`, so passing a free-text label
+    // would silently skip those gates.
+    const matcher = agentType || label
+    runHooks('SubagentStart',
+      { ...base(), subagent_id: subId, subagent_type: matcher, prompt: brief }, matcher, settings)
     try {
       const out = await subLoop({
         brief, cwd, provider, settings, session, permissionMode, depth: 1,
+        agent, tools, maxTurns,
       })
-      runHooks('SubagentStop', { ...base(), subagent_id: subId, subagent_type: label, last_assistant_message: out.text },
-        label, settings)
+      runHooks('SubagentStop', { ...base(), subagent_id: subId, subagent_type: matcher, last_assistant_message: out.text },
+        matcher, settings)
       return out
     } catch (e) {
-      runHooks('SubagentStop', { ...base(), subagent_id: subId, subagent_type: label, error: String(e?.message ?? e) },
-        label, settings)
+      runHooks('SubagentStop', { ...base(), subagent_id: subId, subagent_type: matcher, error: String(e?.message ?? e) },
+        matcher, settings)
       return { error: String(e?.message ?? e) }
     }
   }
@@ -169,13 +198,23 @@ export function createSession({
       runHooks('PostCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
     }
 
-    const { text, toolCalls } = await complete({
-      ...provider, messages, tools: toolSchemas(null, extraSchemas), onToken, onNotice, signal,
+    const { text, toolCalls, usage: u } = await complete({
+      ...provider,
+      messages,
+      // Task is replaced when agents exist, so the enum lists the real roster.
+      tools: toolSchemas(null, extraSchemas)
+        .map((t) => (sessionTools[t.function.name] ? asSchema(sessionTools[t.function.name]) : t)),
+      onToken, onNotice, signal,
     })
+    if (u) {
+      usage.prompt += u.prompt_tokens ?? 0
+      usage.completion += u.completion_tokens ?? 0
+    }
+    usage.requests++
 
     if (!toolCalls.length) {
       final = text
-      if (text) transcript.assistantText(text)
+      if (text) transcript.assistantText(text, u)
       messages.push({ role: 'assistant', content: text })
 
       let stop
@@ -199,7 +238,7 @@ export function createSession({
       return { text: final, blocked: false }
     }
 
-    transcript.assistantToolUse(toolCalls)
+    transcript.assistantToolUse(toolCalls, u)
     messages.push({
       role: 'assistant',
       content: text || null,
@@ -211,6 +250,7 @@ export function createSession({
 
     const results = []
     for (const call of toolCalls) {
+      onTool?.(call.name, call.input)
       const payload = { ...base(), tool_name: call.name, tool_input: call.input, tool_use_id: call.id }
 
       const pre = runHooks('PreToolUse', payload, call.name, settings)
@@ -284,7 +324,9 @@ export function createSession({
     get mode() { return mode },
     set mode(m) { mode = m },
     get turns() { return messages.filter((m) => m.role === 'user').length },
+    get usage() { return { ...usage } },
     get skills() { return skills },
+    get agents() { return agents },
     get resumed() { return resumed },
     /** Drop history but keep the session — the transcript still records it. */
     clear() { messages = []; return true },
@@ -305,11 +347,24 @@ export async function runSession({ prompt, ...opts }) {
  * Subagent* pair the parent fires. It shares the parent's transcript so the
  * gates see one coherent record of the turn.
  */
-async function subLoop({ brief, cwd, provider, settings, session, permissionMode, depth }) {
-  const messages = [{ role: 'user', content: brief }]
-  for (let turn = 0; turn < 12; turn++) {
+async function subLoop({
+  brief, cwd, provider, settings, session, permissionMode, depth,
+  agent = null, tools = null, maxTurns = null,
+}) {
+  // The agent's body IS its system prompt, and its `model:` is a SEAT — running
+  // a cheap discovery agent on the expensive reasoning seat is the exact waste
+  // the roster exists to prevent.
+  const messages = [
+    ...(agent?.prompt ? [{ role: 'system', content: agent.prompt }] : []),
+    { role: 'user', content: brief },
+  ]
+  const subProvider = { ...provider, ...(agent?.model ? { model: agent.model } : {}) }
+  const toolSet = tools ?? SUBAGENT_TOOLS
+  const budget = maxTurns ?? 12
+
+  for (let turn = 0; turn < budget; turn++) {
     const { text, toolCalls } = await complete({
-      ...provider, messages, tools: toolSchemas(SUBAGENT_TOOLS),
+      ...subProvider, messages, tools: toolSchemas(toolSet),
     })
     if (!toolCalls.length) return { text }
 

@@ -42,10 +42,9 @@ run.
 This is the missing half. It is not a Claude Code fork and shares no code with
 one; it is a fresh implementation of the interface the brain expects.
 
-> **Status: young, and honest about it.** Sessions, resume, MCP and skills all
-> work. What is still missing — the brain's 16 subagent definitions, and an
-> `Explore` tool — is listed in [§4](#4-what-works-and-what-does-not) rather
-> than glossed.
+> **Status: young, and honest about it.** Sessions, resume, MCP, skills, the
+> brain's 16 named subagents and a read-only `Explore` all work. What is still
+> missing is listed in [§4](#4-what-works-and-what-does-not) rather than glossed.
 
 ## 2. How it fits
 
@@ -179,6 +178,22 @@ to decide; the body is one tool call away.
 
 ### 3.2 The session
 
+While a turn runs you get the brain's own spinner — its `spinnerVerbs`, its
+`spinnerStyle`, live token count and elapsed time — then its `statusLine` when
+the turn lands:
+
+```
+❯ where is token validation handled?
+  ⠹ (=^·ω·^=) Triangulating… 4s · 3.9k tok
+  ⚒ Explore  where is token validation handled
+It is in src/auth/token.js — validateToken() at line 1, called from
+src/api/route.js:2.
+  serge  local-coder  myrepo  tok 7k/19  brain 1045/20   +7.1k tok  4.2s
+```
+
+The spinner writes to **stderr** and disables itself when that is not a TTY, so
+piping or redirecting a reply gets clean output rather than escape sequences.
+
 `serge` with no `-p` opens a conversation. It keeps history across turns, fires
 the brain's hooks on every one, and only ends when you end it.
 
@@ -197,6 +212,7 @@ the brain's hooks on every one, and only ends when you end it.
 | `/mode [name]` | show or switch permission mode |
 | `/clear` | forget the history, keep the session |
 | `/skills` | skills the model can load on demand |
+| `/agents` | the named subagents `Task` can spawn, and their seats |
 | `/mcp` | MCP servers and their tool counts |
 | `/cost` | turns so far, and the transcript path |
 | `/exit` | leave |
@@ -263,13 +279,25 @@ supply chain.
   commands that expand to their authored prompt; `skills/<name>/SKILL.md` are
   indexed by trigger at session start and loaded on demand through a `Skill` tool
 
+- **the brain's 16 named subagents** — `Task(subagent_type: "scout")` runs that
+  definition's system prompt **on that definition's seat**. `agents/scout.md`
+  says `model: fast-coder`, so discovery runs on the cheap burst seat while the
+  architect gets the expensive one. Seats are validated at load, so a definition
+  naming a seat the router lost is reported once rather than failing inside a
+  subagent nobody is watching
+- **`Explore`** — read-only fan-out search that returns the conclusion instead
+  of the excerpts. Its subagent gets `Read`, `Grep` and `Glob` and nothing that
+  can write, so it can be pointed at unfamiliar code without auditing the brief
+- **the brain's own status line and spinner** — `spinnerVerbs`, `spinnerStyle`
+  and `statusLine` are read from `settings.json`, so a Serge install looks like
+  itself. Token usage is written into the transcript in the shape the brain's
+  `statusline.sh` reads, so `tok` counts are real rather than `0/0`
+
 **Does not, stated plainly so nobody discovers it later:**
 
-- the brain's 16 **subagent definitions** are not loaded — `Task` spawns a
-  generic subagent on a reduced tool set, not `scout` or `reviewer` by name
-- no `Explore` tool
 - MCP is **stdio transport only** — no SSE or HTTP servers
 - the session is a line-based REPL, not a full-screen TUI: no panes, no mouse
+- no session *branching* — resume continues a conversation, it does not fork one
 
 ## 5. The contract
 

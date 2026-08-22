@@ -71,6 +71,11 @@ async function once({ baseUrl, apiKey, model, messages, tools, onToken, signal }
       model,
       messages,
       stream: true,
+      // Ask for usage on the final chunk. The router classifies localhost as
+      // "local" and some shims strip this, which is why a session otherwise
+      // reports zero tokens forever — the numbers exist, they just are not
+      // requested.
+      stream_options: { include_usage: true },
       ...(tools?.length ? { tools, tool_choice: 'auto' } : {}),
     }),
     signal: signal ?? timeout,
@@ -86,6 +91,7 @@ async function once({ baseUrl, apiKey, model, messages, tools, onToken, signal }
 
   let text = ''
   let finishReason = 'stop'
+  let usage = null
   const calls = new Map()          // index -> {id, name, args}
 
   for await (const evt of sse(res.body)) {
@@ -93,6 +99,8 @@ async function once({ baseUrl, apiKey, model, messages, tools, onToken, signal }
     let chunk
     try { chunk = JSON.parse(evt) } catch { continue }
 
+    // The usage chunk carries no choices, so it must be read before the guard.
+    if (chunk.usage) usage = chunk.usage
     const choice = chunk.choices?.[0]
     if (!choice) continue
     if (choice.finish_reason) finishReason = choice.finish_reason
@@ -125,7 +133,7 @@ async function once({ baseUrl, apiKey, model, messages, tools, onToken, signal }
       input: safeJson(c.args),
     }))
 
-  return { text, toolCalls, finishReason }
+  return { text, toolCalls, finishReason, usage }
 }
 
 function safeJson(s) {

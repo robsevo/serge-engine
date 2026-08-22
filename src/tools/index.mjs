@@ -14,6 +14,7 @@ import { glob, grep } from './search.mjs'
 import { task } from './task.mjs'
 import { exitPlanMode } from './plan.mjs'
 import { notebookEdit } from './notebook.mjs'
+import { explore } from './explore.mjs'
 
 export const TOOLS = {
   Bash: bash,
@@ -25,6 +26,7 @@ export const TOOLS = {
   Glob: glob,
   Grep: grep,
   Task: task,
+  Explore: explore,
   ExitPlanMode: exitPlanMode,
 }
 

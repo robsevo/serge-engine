@@ -19,6 +19,9 @@ import { loadSeats, checkSeat } from '../src/seats.mjs'
 import { parseFrontmatter, loadCommands, loadSkills, expandCommand, skillIndex } from '../src/brain.mjs'
 import { replay, listSessions, slugFor } from '../src/sessions.mjs'
 import { loadMcpConfig, startMcp } from '../src/mcp.mjs'
+import { loadAgents } from '../src/brain.mjs'
+import { makeTaskTool } from '../src/tools/task.mjs'
+import { loadSpinnerConfig, createSpinner } from '../src/spinner.mjs'
 
 let pass = 0
 const failures = []
@@ -232,6 +235,59 @@ try {
         JSON.stringify(notices))
   failed.stop()
 
+  // ── subagent definitions ─────────────────────────────────────────────────
+  mkdirSync(join(dir, 'agents'), { recursive: true })
+  writeFileSync(p('agents/scout.md'),
+    '---\nname: scout\ndescription: cheap explorer\nmodel: fast-coder\neffort: low\n---\nYou are the scout.\n')
+  writeFileSync(p('agents/plain.md'), '---\ndescription: no name key\n---\nbody\n')
+  const ag = loadAgents(dir)
+  check('agents: loads definitions', ag.size === 2)
+  check('agents: reads the SEAT', ag.get('scout')?.model === 'fast-coder',
+        'model: is a seat name — running a cheap agent on the expensive seat is the waste the roster prevents')
+  check('agents: reads effort', ag.get('scout')?.effort === 'low')
+  check('agents: body becomes the system prompt', ag.get('scout')?.prompt.startsWith('You are the scout'))
+  check('agents: falls back to the filename when name: is absent', ag.has('plain'))
+
+  const tt = makeTaskTool(ag)
+  check('Task: enum lists the real roster',
+        JSON.stringify(tt.parameters.properties.subagent_type.enum) === '["plain","scout"]',
+        'sorted, so the prompt does not change with readdir order — and a model '
+        + 'offered types that do not exist will pick one anyway')
+  check('Task: description carries the roster', tt.description.includes('cheap explorer'))
+  check('Task: an empty roster leaves no enum',
+        makeTaskTool(new Map()).parameters.properties.subagent_type.enum === undefined)
+
+  // Explore must refuse to nest, like Task — an explorer spawning explorers is
+  // an unbounded tree with nothing tracking depth.
+  const ex = await runTool('Explore', { query: 'x' }, { cwd: dir, depth: 1, spawnSubagent: () => {} })
+  check('Explore: refuses to nest', ex.isError && /may not spawn/.test(ex.content))
+  const exNoAgent = await runTool('Explore', { query: 'x' }, { cwd: dir, depth: 0 })
+  check('Explore: reports when subagents are unavailable', exNoAgent.isError)
+  let gotTools = null
+  await runTool('Explore', { query: 'find it', breadth: 'quick' }, {
+    cwd: dir, depth: 0, spawnSubagent: (o) => { gotTools = o; return { text: 'found' } },
+  })
+  check('Explore: hands the subagent a READ-ONLY tool set',
+        JSON.stringify(gotTools?.tools) === '["Read","Grep","Glob"]',
+        'it can be pointed at unfamiliar code without checking whether the brief was tight enough')
+  check('Explore: breadth becomes a turn budget', gotTools?.maxTurns === 6)
+
+  // ── spinner ───────────────────────────────────────────────────────────────
+  const sp1 = loadSpinnerConfig({ spinnerVerbs: { mode: 'replace', verbs: ['Aaa'] }, spinnerStyle: 'cat' })
+  check('spinner: mode replace uses only the configured verbs',
+        sp1.verbs.length === 1 && sp1.verbs[0] === 'Aaa')
+  const sp2 = loadSpinnerConfig({ spinnerVerbs: { verbs: ['Bbb'] } })
+  check('spinner: any other mode appends to the defaults',
+        sp2.verbs.includes('Bbb') && sp2.verbs.length > 1)
+  check('spinner: an unknown style falls back rather than throwing',
+        loadSpinnerConfig({ spinnerStyle: 'nope' }).style === 'cat')
+  const writes = []
+  const fake = { isTTY: false, write: (x) => writes.push(x) }
+  const sp = createSpinner({ settings: {}, stream: fake })
+  sp.start('x'); sp.stop()
+  check('spinner: silent when not a TTY', writes.length === 0,
+        'an animation in a piped run corrupts whatever is reading the output')
+
   // ── unknown tool ──────────────────────────────────────────────────────────
   r = await runTool('NoSuchTool', {}, ctx)
   check('unknown tool is reported, not thrown', r.isError && /Unknown tool/.test(r.content))
@@ -244,7 +300,7 @@ if (process.argv.includes('--self-test')) {
   // Every assertion above is a real observation, so a suite that reports success
   // regardless would be worthless. This asserts the suite HAS teeth: it must
   // have exercised a meaningful number of checks and be capable of failing.
-  const teeth = total >= 40
+  const teeth = total >= 55
   console.log(teeth
     ? `\n  SELF-TEST PASSED — ${total} independent assertions, each checked against observed state.`
     : `\n  SELF-TEST FAILED — only ${total} assertions; this suite is not covering the tools.`)

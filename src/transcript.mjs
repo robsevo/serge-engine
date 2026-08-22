@@ -34,17 +34,35 @@ export class Transcript {
     this.#append({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } })
   }
 
-  assistantText(text) {
-    this.#append({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })
+  /**
+   * Provider usage in the shape the brain's statusline reads.
+   *
+   * It looks for `message.usage.{input,output}_tokens` straight out of this
+   * file, so omitting it makes a working session report `tok 0/0` forever — the
+   * numbers exist, they just never reach the one thing that shows them.
+   */
+  #usage(u) {
+    return u ? { usage: {
+      input_tokens: u.prompt_tokens ?? 0,
+      output_tokens: u.completion_tokens ?? 0,
+    } } : {}
+  }
+
+  assistantText(text, usage = null) {
+    this.#append({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text }], ...this.#usage(usage) },
+    })
   }
 
   /** calls: [{id, name, input}] */
-  assistantToolUse(calls) {
+  assistantToolUse(calls, usage = null) {
     this.#append({
       type: 'assistant',
       message: {
         role: 'assistant',
         content: calls.map((c) => ({ type: 'tool_use', id: c.id, name: c.name, input: c.input })),
+        ...this.#usage(usage),
       },
     })
   }

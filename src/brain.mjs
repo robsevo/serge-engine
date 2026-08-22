@@ -143,3 +143,40 @@ export function expandCommand(cmd, args) {
     .replace(/\$ARGUMENTS\b/g, args.trim())
     .replace(/\$(\d+)/g, (_, n) => argv[Number(n) - 1] ?? '')
 }
+
+/**
+ * Subagent definitions — `agents/<name>.md`.
+ *
+ * Each is a system prompt plus, crucially, a SEAT: `model: fast-coder` means
+ * "run this agent on the cheap burst seat". That is the whole economics of the
+ * hive — a discovery agent has no business on the expensive reasoning seat, and
+ * an architect has no business on the cheap one. A generic engine ignores the
+ * field because it has no seat roster to resolve it against; this one checks it,
+ * so a definition naming a seat that no longer exists is caught at load rather
+ * than surfacing as a router error inside a subagent nobody is watching.
+ *
+ * @returns {Map<string, {name, description, model, effort, prompt, path}>}
+ */
+export function loadAgents(dir = null) {
+  const root = join(dir || configDir(), 'agents')
+  const map = new Map()
+  let entries
+  try { entries = readdirSync(root, { withFileTypes: true }) } catch { return map }
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith('.md')) continue
+    const path = join(root, e.name)
+    let text
+    try { text = readFileSync(path, 'utf8') } catch { continue }
+    const { meta, body } = parseFrontmatter(text)
+    const name = meta.name || basename(e.name, '.md')
+    map.set(name, {
+      name,
+      description: meta.description || '',
+      model: meta.model || null,
+      effort: meta.effort || null,
+      prompt: body,
+      path,
+    })
+  }
+  return map
+}
