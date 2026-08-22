@@ -19,3 +19,6 @@ tests/conformance/.runs/
 
 # ─── Generated at install time ───────────────────────────────────────────────
 package-lock.json
+
+# Ink/React are real dependencies now — installed, not vendored.
+node_modules/

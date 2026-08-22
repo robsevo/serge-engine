@@ -96,7 +96,12 @@ export async function main(argv = process.argv.slice(2)) {
     const chk = checkSeat(seat0)
     if (!chk.ok) { process.stderr.write(`serge-engine: ${chk.reason}\n`); return 64 }
     const mcp = await startMcp({ onNotice: (m) => process.stderr.write(`serge-engine: ${m}\n`) })
-    const { repl } = await import('./repl.mjs')
+    // SERGE_TUI=readline falls back to the dependency-free renderer; the Ink
+    // one is default because it is what actually matches serge.
+    const useInk = process.env.SERGE_TUI !== 'readline'
+    const { repl } = useInk
+      ? { repl: (await import('./ink-repl.mjs')).inkRepl }
+      : await import('./repl.mjs')
     try {
       return await repl({
         cwd: process.cwd(), model: val('--model'), permissionMode: mode0,
