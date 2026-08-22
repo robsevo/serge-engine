@@ -34,8 +34,8 @@ import { createPane, fit, visible } from './pane.mjs'
 
 const C = stdout.isTTY
   ? { dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m',
-      c: '\x1b[36m', x: '\x1b[0m' }
-  : { dim: '', b: '', g: '', y: '', r: '', c: '', x: '' }
+      c: '\x1b[36m', bg: '\x1b[48;5;236m', x: '\x1b[0m' }
+  : { dim: '', b: '', g: '', y: '', r: '', c: '', bg: '', x: '' }
 
 /** 1234 -> 1.2k. Token counts are read at a glance, not audited. */
 const fmt = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
@@ -83,6 +83,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   // animation frame — a 100ms spinner tick would fork ten times a second.
   let statusCache = ''
   const shortCwd = cwd.startsWith(homedir()) ? `~${cwd.slice(homedir().length)}` : cwd
+  const COMPACT_AT = Number(process.env.SERGE_COMPACT_AT || 400_000)
   let streaming = false
   let paneTimer = null
   let atLineStart = true
@@ -129,7 +130,11 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       `${C.dim}${shortCwd}${C.x}`,
     ]
 
-    const meter = `${C.dim}${tok ? `${fmt(tok)} tok · ` : ''}${session.turns} turn${session.turns === 1 ? '' : 's'}${C.x}`
+    // ctx% is what actually matters as a session runs long — it says how close
+    // the conversation is to needing a compaction, which a raw token count does
+    // not.
+    const ctx = Math.min(99, Math.round((session.contextChars / COMPACT_AT) * 100))
+    const meter = `${C.dim}${tok ? `${fmt(tok)} tok · ` : ''}ctx ${ctx}%${C.x}`
 
     // Clawd is 8 columns at his widest; pad the narrow rows so the text column
     // starts in the same place on all three.
@@ -143,7 +148,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       `${C.dim}${'─'.repeat(Math.max(0, cols))}${C.x}`,
       beside(0, identity[0]) + ' '.repeat(gap) + meter,
       beside(1, identity[1]),
-      beside(2, identity[2]),
+      beside(2, spinning ? `${C.dim}thinking…${C.x}` : identity[2]),
       ` ${statusCache || `${C.dim}${session.model}${C.x}`}`,
       ` ${marker} ${C.dim}${MODE_LABEL[mode] ?? mode} (shift+tab to cycle)${C.x}`,
     ])
@@ -444,6 +449,14 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     const text = line.trim()
     if (!text) { prompt(); continue }
 
+    // readline has already echoed the line; redraw it as a full-width band so
+    // each turn has a visible boundary in a long transcript.
+    if (stdout.isTTY && !text.startsWith('/')) {
+      const w = stdout.columns || 80
+      const shown = ` ${C.c}❯${C.x} ${text}`
+      stdout.write(`\x1b[1A\x1b[2K${C.bg}${shown}${' '.repeat(Math.max(0, w - visible(shown)))}${C.x}\n`)
+    }
+
     const handled = await handleCommand(text)
     if (handled === true) { prompt(); continue }
     // A brain command expands into a prompt; anything else is the prompt itself.
@@ -502,10 +515,10 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       settings, sessionId: session.sessionId, cwd, model: session.model, usage: u,
     })
     if (pane.enabled) {
-      // The pane already carries seat, mode, turns and totals; repeating them
-      // after every turn is noise. Only the per-turn cost is new.
-      stdout.write(`${C.dim}  ${spent > 0 ? `+${fmt(spent)} tok · ` : ''}`
-        + `${spinner.elapsed().toFixed(1)}s${C.x}\n\n`)
+      // The pane already carries seat, mode, turns and totals. All this line has
+      // to say is that the turn finished and how long it took.
+      const secs = spinner.elapsed()
+      stdout.write(`${C.g}✓${C.x} ${C.dim}Done · ${secs < 10 ? secs.toFixed(1) : Math.round(secs)}s${C.x}\n\n`)
     } else {
       const status = renderStatusLine({
         settings, sessionId: session.sessionId, cwd, model: session.model, usage: session.usage,

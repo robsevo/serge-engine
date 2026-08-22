@@ -350,6 +350,8 @@ export function createSession({
     set mode(m) { mode = m },
     get turns() { return messages.filter((m) => m.role === 'user').length },
     get usage() { return { ...usage } },
+    /** Characters of live history — what the ctx% meter is a fraction of. */
+    get contextChars() { return size(messages) },
     get skills() { return skills },
     get agents() { return agents },
     get resumed() { return resumed },
