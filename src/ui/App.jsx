@@ -5,6 +5,7 @@ import { SergeBar } from './SergeBar.jsx'
 import { StatusBar } from './StatusBar.jsx'
 import { Spinner } from './Spinner.jsx'
 import { PromptInput } from './PromptInput.jsx'
+import { Rule } from './Rule.jsx'
 import { POSES } from './Clawd.jsx'
 import { renderStatusLine } from '../statusline.mjs'
 import { MODES } from '../permissions.mjs'
@@ -149,6 +150,7 @@ export function App({ session, settings, cwd, version, commands, onExit }) {
         feetFrame={busy ? Math.floor(frame / 3) : 0}
         isLoading={busy}
       />
+      <Rule />
       <PromptInput
         onSubmit={submit}
         onCycleMode={cycleMode}
@@ -156,6 +158,7 @@ export function App({ session, settings, cwd, version, commands, onExit }) {
         busy={busy}
         history={history.current}
       />
+      <Rule />
       <StatusBar status={status} mode={mode} ctx={ctx} />
     </Box>
   )

@@ -76,7 +76,7 @@ function paintLine(text, stops, lineT) {
 }
 
 /** Left-to-right across the full gradient — the box rules, so they match the wordmark. */
-function paintRule(text, stops) {
+export function paintRule(text, stops) {
   let out = ''
   for (let i = 0; i < text.length; i++) {
     out += rgb(...gradAt(stops, text.length > 1 ? i / (text.length - 1) : 0)) + text[i]
