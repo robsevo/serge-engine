@@ -33,9 +33,16 @@ export function clawd({ pose = 'default', feetFrame = 0, color = true, rgb = [90
   const n = FEET_FRAMES.length
   const feet = FEET_INDENT + FEET_FRAMES[((feetFrame % n) + n) % n]
   const paint = color ? (s) => `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m${s}\x1b[0m` : (s) => s
+
+  // Every row padded to the same width. The head row grows with the sway
+  // (`lead` spaces + 5 columns), so without this he shifts sideways as he looks
+  // around — the horizontal jitter the fixed footprint exists to prevent.
+  const W = Math.max(f.face.length, f.lead + HEAD.length, feet.length)
+  const pad = (row) => row + ' '.repeat(Math.max(0, W - [...row].length))
+
   return [
-    paint(' '.repeat(f.lead) + HEAD),
-    paint(f.face),
-    paint(feet),
+    paint(pad(' '.repeat(f.lead) + HEAD)),
+    paint(pad(f.face)),
+    paint(pad(feet)),
   ]
 }

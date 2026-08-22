@@ -188,7 +188,7 @@ export function renderStartup({
  */
 export function renderHeader({
   version = '0.1.0', effort = '', cwd = '', pose = 'default', feetFrame = 0,
-  palette = null, color = true,
+  sprite = true, palette = null, color = true,
 } = {}) {
   const pl = resolvePalette(palette)
   const col = color ? rgb : () => ''
@@ -196,7 +196,9 @@ export function renderHeader({
   const dm = color ? DIM : ''
   const bold = color ? `${ESC}1m` : ''
 
-  const art = clawd({ pose, feetFrame, color, rgb: pl.gradient[2] })
+  // The pane carries a live Clawd; a second static one here would be two of him
+  // on screen, one of which never moves.
+  const art = sprite ? clawd({ pose, feetFrame, color, rgb: pl.gradient[2] }) : ['', '', '']
   let dir = cwd || process.cwd()
   try { dir = dir.replace(homedir(), '~') } catch { /* keep it absolute */ }
 
@@ -206,5 +208,10 @@ export function renderHeader({
     `${dm}${col(...pl.dim)}${dir}${rst}`,
   ]
 
-  return ['', ...art.map((a, i) => ` ${a}  ${right[i] ?? ''}`), ''].join('\n')
+  const pad = sprite ? 10 : 1
+  return ['', ...right.map((line, i) => {
+    const a = art[i] ?? ''
+    const gap = ' '.repeat(Math.max(1, pad - [...a.replace(/\x1b\[[0-9;]*m/g, '')].length))
+    return ` ${a}${gap}${line}`
+  }), ''].join('\n')
 }

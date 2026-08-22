@@ -27,6 +27,7 @@ import { loadCommands, expandCommand } from './brain.mjs'
 import { createSpinner } from './spinner.mjs'
 import { renderStatusLine } from './statusline.mjs'
 import { renderStartup, renderHeader } from './startup.mjs'
+import { clawd, MOTION } from './clawd.mjs'
 import { MODES as ALL_MODES } from './permissions.mjs'
 import { createPane, fit, visible } from './pane.mjs'
 
@@ -68,8 +69,12 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   const spinner = createSpinner({ settings })
   // Two reserved rows at the bottom: a rule, and a live status line. Output
   // scrolls above them and scrollback is untouched — see pane.mjs.
-  // Three rows: a rule, the brain's own status line, and the permission mode.
-  const pane = createPane({ rows: 3 })
+  // Four rows: a rule, then Clawd on the left with the status stacked beside
+  // him. He lives in the PANE rather than the header because the pane repaints —
+  // scrollback does not, and a mascot that only moves if you scroll to him is
+  // not moving.
+  const pane = createPane({ rows: 4 })
+  let tickCount = 0
   // The status line spawns a process, so it is refreshed per TURN, not per
   // animation frame — a 100ms spinner tick would fork ten times a second.
   let statusCache = ''
@@ -93,20 +98,41 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     const u = session.usage
     const tok = u.prompt + u.completion
 
-    // Row 1: the brain's status line when idle, the spinner while working —
-    // whichever is the more useful thing to be looking at right now.
-    const left = spinning
-      ? `${C.y}${spinner.frame()}${C.x}`
-      : (statusCache || `${C.dim}${session.model}  ${session.turns} turn(s)${C.x}`)
-    const right = `${C.dim}${tok ? `${fmt(tok)} tok · ` : ''}${session.model}${C.x}`
-    const gap = Math.max(1, cols - visible(left) - visible(right) - 2)
+    // He looks around and blinks while a turn is in flight, and rests between
+    // them. The feet shuffle on a slower cycle than the gaze so the two are not
+    // in lockstep, which reads as mechanical rather than alive.
+    const art = spinning
+      ? clawd({
+          pose: MOTION[Math.floor(tickCount / 6) % MOTION.length],
+          feetFrame: Math.floor(tickCount / 3),
+          color: Boolean(stdout.isTTY),
+        })
+      : clawd({ color: Boolean(stdout.isTTY) })
 
+    const top = spinning
+      ? `${C.y}${spinner.frame()}${C.x}`
+      : `${C.g}●${C.x} ${C.dim}ready${C.x}`
+    const status = statusCache || `${C.dim}${session.model}  ${session.turns} turn(s)${C.x}`
     const mode = session.mode
     const marker = mode === 'plan' ? `${C.y}⏸${C.x}` : `${C.c}▶▶${C.x}`
+    const modeRow = `${marker} ${C.dim}${MODE_LABEL[mode] ?? mode} (shift+tab to cycle)${C.x}`
+    const meter = `${C.dim}${tok ? `${fmt(tok)} tok` : ''}${C.x}`
+
+    // Clawd is 8 columns wide at his widest row; pad the narrow rows so the
+    // text column starts at the same place on all three.
+    const CW = 8
+    const beside = (i, text) => {
+      const a = art[i] ?? ''
+      const padding = ' '.repeat(Math.max(0, CW - visible(a)))
+      return ` ${a}${padding}  ${text}`
+    }
+    const gap = Math.max(1, cols - visible(beside(0, top)) - visible(meter) - 1)
+
     pane.set([
       `${C.dim}${'─'.repeat(Math.max(0, cols))}${C.x}`,
-      ` ${left}${' '.repeat(gap)}${right}`,
-      ` ${marker} ${C.dim}${MODE_LABEL[mode] ?? mode} (shift+tab to cycle)${C.x}`,
+      beside(0, top) + ' '.repeat(gap) + meter,
+      beside(1, status),
+      beside(2, modeRow),
     ])
   }
 
@@ -161,6 +187,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     version: VERSION,
     effort: settings.effortLevel || '',
     cwd,
+    sprite: false,          // he lives in the pane, where he can move
     color: Boolean(stdout.isTTY),
   }))
   statusCache = renderStatusLine({
@@ -389,6 +416,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
         const u = session.usage
         const t = u.prompt + u.completion - before.prompt - before.completion
         spinner.update(t > 0 ? `${fmt(t)} tok` : '')
+        tickCount++
         paintPane(true)
       }, 100)
     } else {

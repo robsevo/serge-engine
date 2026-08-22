@@ -24,6 +24,7 @@ import { makeTaskTool } from '../src/tools/task.mjs'
 import { loadSpinnerConfig, createSpinner } from '../src/spinner.mjs'
 import { renderStartup, resolvePalette } from '../src/startup.mjs'
 import { createPane, fit, visible } from '../src/pane.mjs'
+import { clawd, MOTION } from '../src/clawd.mjs'
 
 let pass = 0
 const failures = []
@@ -401,6 +402,25 @@ try {
   check('pane: disables itself on a short terminal', !shortPane.enabled)
   shortPane.stop()
 
+  // ── the mascot ───────────────────────────────────────────────────────────
+  const rest = clawd({ color: false })
+  check('clawd: three rows', rest.length === 3)
+  check('clawd: no half-blocks', !/[▐▌]/.test(rest.join('')),
+        'half-blocks vanish entirely in some terminal fonts, which is why the original avoids them')
+
+  // Same footprint every pose, or he jitters sideways as he looks around.
+  const footprints = new Set(MOTION.map((pose) =>
+    clawd({ pose, color: false }).map((r) => [...r].length).join(',')))
+  check('clawd: every pose keeps the same footprint', footprints.size === 1,
+        [...footprints].join(' | '))
+
+  const gazes = new Set(MOTION.map((pose) => clawd({ pose, color: false })[0]))
+  check('clawd: the head actually sways between poses', gazes.size > 1)
+  const steps = new Set([0, 1, 2, 3, 4].map((f) => clawd({ feetFrame: f, color: false })[2]))
+  check('clawd: the feet actually shuffle', steps.size > 1)
+  check('clawd: a negative feet frame wraps rather than throwing',
+        clawd({ feetFrame: -3, color: false }).length === 3)
+
   // ── unknown tool ──────────────────────────────────────────────────────────
   r = await runTool('NoSuchTool', {}, ctx)
   check('unknown tool is reported, not thrown', r.isError && /Unknown tool/.test(r.content))
@@ -413,7 +433,7 @@ if (process.argv.includes('--self-test')) {
   // Every assertion above is a real observation, so a suite that reports success
   // regardless would be worthless. This asserts the suite HAS teeth: it must
   // have exercised a meaningful number of checks and be capable of failing.
-  const teeth = total >= 78
+  const teeth = total >= 85
   console.log(teeth
     ? `\n  SELF-TEST PASSED — ${total} independent assertions, each checked against observed state.`
     : `\n  SELF-TEST FAILED — only ${total} assertions; this suite is not covering the tools.`)
