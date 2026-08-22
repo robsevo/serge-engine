@@ -9,6 +9,8 @@ import { runSession } from './loop.mjs'
 import { providerConfig, loadSettings, configDir } from './config.mjs'
 import { MODES } from './permissions.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
+import { listSessions, findSession, renderSessions } from './sessions.mjs'
+import { startMcp } from './mcp.mjs'
 
 export const VERSION = '0.1.0'
 
@@ -18,6 +20,11 @@ export async function main(argv = process.argv.slice(2)) {
 
   if (has('--version', '-v')) { console.log(`${VERSION} (serge-engine)`); return 0 }
   if (has('--help', '-h')) { console.log(HELP); return 0 }
+
+  if (has('--sessions')) {
+    console.log(renderSessions(listSessions(process.cwd())))
+    return 0
+  }
 
   if (has('--seats')) {
     console.log(renderSeats())
@@ -48,6 +55,25 @@ export async function main(argv = process.argv.slice(2)) {
 
   const printIdx = argv.findIndex((a) => a === '-p' || a === '--print')
 
+  // --continue resumes the newest session here; --resume takes an id or prefix,
+  // and with no argument means the newest as well. An unmatched ref is an error
+  // rather than a silent new session: "it forgot everything" is the worst way
+  // to discover a typo.
+  let resumeFrom = null
+  let resumeInfo = null
+  if (has('--continue', '-c') || has('--resume', '-r')) {
+    const ref = val('--resume') || val('-r')
+    const hit = findSession(process.cwd(), ref && !ref.startsWith('-') ? ref : null)
+    if (!hit) {
+      process.stderr.write(ref
+        ? `serge-engine: no session matching "${ref}" in this directory.\n  serge --sessions to list them.\n`
+        : 'serge-engine: no previous session in this directory.\n')
+      return 64
+    }
+    resumeFrom = hit.path
+    resumeInfo = hit
+  }
+
   // No -p means an interactive session. Refuse only when there is no terminal
   // to read from: a piped stdin with no -p is almost always a mistake, and
   // opening a REPL on it would hang with no prompt visible.
@@ -66,8 +92,16 @@ export async function main(argv = process.argv.slice(2)) {
     const seat0 = val('--model') || providerConfig(loadSettings()).model
     const chk = checkSeat(seat0)
     if (!chk.ok) { process.stderr.write(`serge-engine: ${chk.reason}\n`); return 64 }
+    const mcp = await startMcp({ onNotice: (m) => process.stderr.write(`serge-engine: ${m}\n`) })
     const { repl } = await import('./repl.mjs')
-    return repl({ cwd: process.cwd(), model: val('--model'), permissionMode: mode0 })
+    try {
+      return await repl({
+        cwd: process.cwd(), model: val('--model'), permissionMode: mode0,
+        mcp, resumeFrom, resumeInfo,
+      })
+    } finally {
+      mcp.stop()
+    }
   }
 
 
@@ -94,11 +128,14 @@ export async function main(argv = process.argv.slice(2)) {
     return 64
   }
 
+  const mcp = await startMcp({ onNotice: (m) => process.stderr.write(`serge-engine: ${m}\n`) })
   try {
     const res = await runSession({
       prompt,
       cwd: process.cwd(),
       model: val('--model'),
+      mcp,
+      resumeFrom,
       permissionMode: mode,
       onToken: (t) => process.stdout.write(t),
       onNotice: (m) => process.stderr.write(`serge-engine: ${m}\n`),
@@ -108,6 +145,8 @@ export async function main(argv = process.argv.slice(2)) {
   } catch (e) {
     process.stderr.write(`serge-engine: ${e?.message ?? e}\n`)
     return 1
+  } finally {
+    mcp.stop()
   }
 }
 
@@ -129,6 +168,9 @@ const HELP = `serge-engine ${VERSION} — an MIT agent engine for serge-public
   serge --version
 
   --model <seat>           override OPENAI_MODEL for this run
+  --continue, -c           resume the most recent session in this directory
+  --resume [id]            resume a session by id or prefix (newest if omitted)
+  --sessions               list resumable sessions here
   --seats                  list the model seats this router has configured
   --permission-mode <m>    default | acceptEdits | plan | bypassPermissions | fullAccess
   --yolo, --auto           shorthand for --permission-mode fullAccess

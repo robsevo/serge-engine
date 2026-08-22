@@ -42,9 +42,10 @@ run.
 This is the missing half. It is not a Claude Code fork and shares no code with
 one; it is a fresh implementation of the interface the brain expects.
 
-> **Status: young, and honest about it.** Interactive sessions and the headless
-> path both work. What is still missing — MCP, session resume, skills loading —
-> is listed in [§4](#4-what-works-and-what-does-not) rather than glossed.
+> **Status: young, and honest about it.** Sessions, resume, MCP and skills all
+> work. What is still missing — the brain's 16 subagent definitions, and an
+> `Explore` tool — is listed in [§4](#4-what-works-and-what-does-not) rather
+> than glossed.
 
 ## 2. How it fits
 
@@ -57,7 +58,7 @@ the models. Each seam is a contract, which is what lets any part be swapped.
 flowchart LR
     subgraph BRAIN["🧠 BRAIN — serge-brain"]
         direction TB
-        B1["constitution<br/>68 hook scripts<br/>16 agents · 22 skills"]
+        B1["constitution<br/>68 hook scripts<br/>16 agents · 21 skills"]
     end
 
     subgraph ENGINE["⚙️ ENGINE — this repo"]
@@ -159,6 +160,23 @@ MCP or session resume, which this engine does not have yet.
 They meet at a contract, not an API. If you pin, pin both to the same revision of
 [`docs/ENGINE-CONTRACT.md`](docs/ENGINE-CONTRACT.md).
 
+### 3.1 What the engine loads from the brain
+
+| in the config dir | becomes |
+|---|---|
+| `settings.json` | 53 hook wirings across 13 events |
+| `litellm.yaml` | the seat roster — `--seats`, and seat validation |
+| `commands/*.md` | slash commands that expand to their authored prompt |
+| `skills/<name>/SKILL.md` | an index at session start; bodies on demand via `Skill` |
+| `.mcp.json` / `.claude.json` | MCP servers, tools namespaced per server |
+| `CLAUDE.md` → `CONSTITUTION.md` | loaded by the brain's own hooks |
+
+None of it is interpreted by the engine — it is found, presented, and dispatched.
+Skills load **on demand** for a reason: 21 skill bodies run to tens of thousands
+of tokens, so injecting them all would spend most of a context window on
+instructions for work the turn is not doing. The index is one line each, enough
+to decide; the body is one tool call away.
+
 ### 3.2 The session
 
 `serge` with no `-p` opens a conversation. It keeps history across turns, fires
@@ -178,8 +196,23 @@ the brain's hooks on every one, and only ends when you end it.
 | `/model [seat]` | show or switch seat, mid-conversation |
 | `/mode [name]` | show or switch permission mode |
 | `/clear` | forget the history, keep the session |
+| `/skills` | skills the model can load on demand |
+| `/mcp` | MCP servers and their tool counts |
 | `/cost` | turns so far, and the transcript path |
 | `/exit` | leave |
+
+Plus every command the brain authors in `commands/*.md` — `/recap`, `/plans`,
+`/learn` and the rest — which expand to their authored prompt. Tab completion
+lists them all.
+
+**Resuming.** A session survives the process:
+
+```bash
+serge --sessions          # what is resumable here
+serge --continue          # newest conversation in this directory
+serge --resume 4f2a       # by id or prefix
+serge -c -p "and now?"    # resume works headless too
+```
 
 Three interrupts, deliberately different:
 
@@ -220,14 +253,22 @@ supply chain.
   brain's hooks fire on every one of them, `Ctrl+C` stops a generation without
   ending the session, and `/model` and `/mode` switch seat and permission mode
   mid-conversation
+- **session resume** — `--continue` picks up the newest conversation in this
+  directory, `--resume <id>` picks one by id or prefix, `--sessions` lists them.
+  Replay comes from the transcript itself, so there is no second store to drift
+- **MCP** — `mcpServers` from `.mcp.json` / `.claude.json` (the same shape Claude
+  Code uses), tools namespaced `mcp__<server>__<tool>`. A server that will not
+  spawn is reported once and skipped
+- **skills and slash commands** — the brain's `commands/*.md` become slash
+  commands that expand to their authored prompt; `skills/<name>/SKILL.md` are
+  indexed by trigger at session start and loaded on demand through a `Skill` tool
 
 **Does not, stated plainly so nobody discovers it later:**
 
-- no MCP
-- no session resume — a new run starts a new conversation
-- no skills / commands / agents loading (`/help` lists the engine's own commands,
-  not the brain's slash commands)
+- the brain's 16 **subagent definitions** are not loaded — `Task` spawns a
+  generic subagent on a reduced tool set, not `scout` or `reviewer` by name
 - no `Explore` tool
+- MCP is **stdio transport only** — no SSE or HTTP servers
 - the session is a line-based REPL, not a full-screen TUI: no panes, no mouse
 
 ## 5. The contract

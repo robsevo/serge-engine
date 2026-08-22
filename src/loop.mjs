@@ -17,6 +17,9 @@ import { toolSchemas, runTool, SUBAGENT_TOOLS } from './tools/index.mjs'
 import { complete } from './provider.mjs'
 import { checkPermission } from './permissions.mjs'
 import { shouldCompact, compact, size } from './compact.mjs'
+import { loadSkills, skillIndex } from './brain.mjs'
+import { makeSkillTool } from './tools/skill.mjs'
+import { replay } from './sessions.mjs'
 
 const MAX_TURNS = 40
 const COMPACT_AT_CHARS = Number(process.env.SERGE_COMPACT_AT || 400_000)
@@ -63,6 +66,7 @@ function boundResult(name, content) {
  */
 export function createSession({
   cwd, model, onToken, onNotice, permissionMode = 'default',
+  mcp = null, resumeFrom = null, loadBrain = true,
 }) {
   const settings = loadSettings()
   const provider = providerConfig(settings)
@@ -76,6 +80,29 @@ export function createSession({
   let messages = []
   let mode = permissionMode
   let started = false
+
+  // Skills are session-scoped: the index goes into context once, and the Skill
+  // tool that reads a body is built against THIS session's set.
+  const skills = loadBrain ? loadSkills() : new Map()
+  const sessionTools = skills.size ? { Skill: makeSkillTool(skills) } : {}
+  const extraSchemas = [
+    ...(skills.size
+      ? [{ type: 'function',
+           function: { name: 'Skill',
+                       description: sessionTools.Skill.description,
+                       parameters: sessionTools.Skill.parameters } }]
+      : []),
+    ...(mcp?.tools ?? []),
+  ]
+
+  // Resume: replay a prior transcript into message state. The conversation is
+  // continued, not re-run — no hooks fire for turns that already happened.
+  let resumed = null
+  if (resumeFrom) {
+    const r = replay(resumeFrom)
+    messages = r.messages
+    resumed = { turns: r.turns, dropped: r.dropped, path: resumeFrom }
+  }
 
   /** Subagent spawner, injected into the Task tool (see tools/task.mjs). */
   const spawnSubagent = async ({ prompt: brief, label }) => {
@@ -106,7 +133,10 @@ export function createSession({
     // hooks load memory, the repo card and the reasoning overlay, and re-running
     // them every turn would re-inject the same context indefinitely.
     if (!started) {
-      runHooks('SessionStart', { ...base(), source: 'startup' }, 'startup', settings)
+      runHooks('SessionStart', { ...base(), source: resumed ? 'resume' : 'startup' },
+        resumed ? 'resume' : 'startup', settings)
+      const idx = skillIndex(skills)
+      if (idx) messages.push({ role: 'system', content: idx })
       started = true
     }
 
@@ -140,7 +170,7 @@ export function createSession({
     }
 
     const { text, toolCalls } = await complete({
-      ...provider, messages, tools: toolSchemas(), onToken, onNotice, signal,
+      ...provider, messages, tools: toolSchemas(null, extraSchemas), onToken, onNotice, signal,
     })
 
     if (!toolCalls.length) {
@@ -207,7 +237,7 @@ export function createSession({
       }
 
       const out = await runTool(call.name, call.input, {
-        cwd, depth: 0, spawnSubagent,
+        cwd, depth: 0, spawnSubagent, mcp, sessionTools,
         // Approving a plan is what ends plan mode — the tool cannot do it
         // itself, because the mode belongs to the session, not the call.
         onPlanApproved: () => { if (mode === 'plan') mode = 'acceptEdits' },
@@ -254,6 +284,8 @@ export function createSession({
     get mode() { return mode },
     set mode(m) { mode = m },
     get turns() { return messages.filter((m) => m.role === 'user').length },
+    get skills() { return skills },
+    get resumed() { return resumed },
     /** Drop history but keep the session — the transcript still records it. */
     clear() { messages = []; return true },
   }

@@ -11,11 +11,14 @@
  *   node tests/tools.test.mjs
  *   node tests/tools.test.mjs --self-test   # proves the suite can fail
  */
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runTool } from '../src/tools/index.mjs'
 import { loadSeats, checkSeat } from '../src/seats.mjs'
+import { parseFrontmatter, loadCommands, loadSkills, expandCommand, skillIndex } from '../src/brain.mjs'
+import { replay, listSessions, slugFor } from '../src/sessions.mjs'
+import { loadMcpConfig, startMcp } from '../src/mcp.mjs'
 
 let pass = 0
 const failures = []
@@ -160,6 +163,75 @@ try {
         checkSeat('anything', null).ok,
         'an engine that refuses to start because a convenience file is absent is worse than one without the convenience')
 
+  // ── brain content: frontmatter, commands, skills ─────────────────────────
+  const fm = parseFrontmatter(
+    '---\nname: demo\ndescription: "a quoted one"\nallowed-tools: Bash(ls:*)\n---\n\n# Body\ntext\n')
+  const meta = fm.meta
+  check('frontmatter: parses keys', meta.name === 'demo' && meta.description === 'a quoted one')
+  check('frontmatter: keeps hyphenated keys', meta['allowed-tools'] === 'Bash(ls:*)')
+  check('frontmatter: body excludes the block', fm.body.startsWith('# Body'))
+  check('frontmatter: a file with no block is all body',
+        parseFrontmatter('just text').body === 'just text')
+
+  mkdirSync(join(dir, 'commands', 'ns'), { recursive: true })
+  writeFileSync(p('commands/hello.md'), '---\ndescription: greet\n---\nSay hello to $ARGUMENTS\n')
+  writeFileSync(p('commands/ns/deep.md'), '---\ndescription: nested\n---\nnested body\n')
+  const cmds = loadCommands(dir)
+  check('commands: loads top-level', cmds.has('hello'))
+  check('commands: namespaces one level', cmds.has('ns:deep'), [...cmds.keys()].join(','))
+  check('commands: $ARGUMENTS expands',
+        expandCommand(cmds.get('hello'), 'world') === 'Say hello to world\n')
+
+  mkdirSync(join(dir, 'skills', 'alpha'), { recursive: true })
+  mkdirSync(join(dir, 'skills', '_data'), { recursive: true })
+  writeFileSync(p('skills/alpha/SKILL.md'),
+    '---\nname: alpha\ndescription: d\nwhenToUse: when testing\n---\nZZBODYMARKERZZ\n')
+  const sk = loadSkills(dir)
+  check('skills: loads one with a SKILL.md', sk.size === 1 && sk.has('alpha'))
+  check('skills: a directory without SKILL.md is not a skill', !sk.has('_data'),
+        'a data dir beside the skills would otherwise be offered as one')
+  check('skills: the index carries the trigger, not the body',
+        skillIndex(sk).includes('when testing') && !skillIndex(sk).includes('ZZBODYMARKERZZ'),
+        'the body is what the Skill tool fetches; putting it in the index defeats on-demand loading')
+
+  // ── session replay ────────────────────────────────────────────────────────
+  const tx = p('t.jsonl')
+  const mk = (o) => JSON.stringify(o)
+  writeFileSync(tx, [
+    mk({ type: 'user', message: { content: [{ type: 'text', text: 'first' }] } }),
+    mk({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'c1', name: 'Bash', input: { command: 'ls' } }] } }),
+    mk({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'out' }] } }),
+    mk({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } }),
+  ].join('\n') + '\n')
+  const rp = replay(tx)
+  check('replay: counts real user turns only', rp.turns === 1,
+        'a tool_result also arrives as a user entry and must not count as a turn')
+  check('replay: rebuilds the tool call', rp.messages[1]?.tool_calls?.[0]?.id === 'c1')
+  check('replay: pairs the result by id',
+        rp.messages[2]?.role === 'tool' && rp.messages[2]?.tool_call_id === 'c1',
+        'an unpaired tool_call makes the whole request invalid')
+  check('replay: a missing file is empty, not a throw', replay(p('nope.jsonl')).turns === 0)
+  check('sessions: slug matches the transcript layout', slugFor('/a/b') === 'a-b')
+
+  // ── MCP ───────────────────────────────────────────────────────────────────
+  writeFileSync(p('.mcp.json'), JSON.stringify({ mcpServers: { x: { command: 'true' } } }))
+  check('mcp: finds config', loadMcpConfig(dir).servers.x?.command === 'true')
+  check('mcp: no config is empty, not an error',
+        Object.keys(loadMcpConfig(join(dir, 'commands')).servers).length === 0)
+
+  const broken = await startMcp({ dir: p('nowhere'), onNotice: () => {} })
+  check('mcp: absent config yields no tools and no throw', broken.tools.length === 0)
+
+  // A server that cannot spawn must be skipped, not fatal: an optional
+  // integration being unhealthy is not a reason the agent cannot start.
+  writeFileSync(p('.mcp.json'), JSON.stringify({
+    mcpServers: { dead: { command: 'definitely-not-a-real-binary-xyz' } } }))
+  const notices = []
+  const failed = await startMcp({ dir, onNotice: (m) => notices.push(m) })
+  check('mcp: a broken server fails OPEN', failed.tools.length === 0 && notices.length === 1,
+        JSON.stringify(notices))
+  failed.stop()
+
   // ── unknown tool ──────────────────────────────────────────────────────────
   r = await runTool('NoSuchTool', {}, ctx)
   check('unknown tool is reported, not thrown', r.isError && /Unknown tool/.test(r.content))
@@ -172,7 +244,7 @@ if (process.argv.includes('--self-test')) {
   // Every assertion above is a real observation, so a suite that reports success
   // regardless would be worthless. This asserts the suite HAS teeth: it must
   // have exercised a meaningful number of checks and be capable of failing.
-  const teeth = total >= 25
+  const teeth = total >= 40
   console.log(teeth
     ? `\n  SELF-TEST PASSED — ${total} independent assertions, each checked against observed state.`
     : `\n  SELF-TEST FAILED — only ${total} assertions; this suite is not covering the tools.`)

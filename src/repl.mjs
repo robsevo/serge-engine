@@ -27,6 +27,7 @@ import { createSession } from './loop.mjs'
 import { providerConfig, loadSettings, configDir } from './config.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { MODES } from './permissions.mjs'
+import { loadCommands, expandCommand } from './brain.mjs'
 
 const C = stdout.isTTY
   ? { dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m',
@@ -37,6 +38,8 @@ const HELP = `
   ${C.b}Commands${C.x}
     /help              this
     /seats             model seats the router has configured
+    /skills            skills the model can load on demand
+    /mcp               MCP servers and their tool counts
     /model [seat]      show or switch the seat for this session
     /mode [name]       show or switch permission mode
                        (${MODES.join(' · ')})
@@ -50,14 +53,19 @@ const HELP = `
     Ctrl+D             exit
 `
 
-export async function repl({ cwd, model, permissionMode }) {
+export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom = null, resumeInfo = null }) {
   const settings = loadSettings()
   const seats = loadSeats()
+  // The brain authors its own slash commands as markdown; the engine finds and
+  // expands them rather than defining them.
+  const commands = loadCommands()
 
   const session = createSession({
     cwd,
     model,
     permissionMode: permissionMode || 'default',
+    mcp,
+    resumeFrom,
     onToken: (t) => stdout.write(t),
     onNotice: (m) => stdout.write(`${C.dim}  · ${m}${C.x}\n`),
   })
@@ -68,6 +76,13 @@ export async function repl({ cwd, model, permissionMode }) {
     `${C.dim}  router  ${providerConfig(settings).baseUrl}`
       + `${seats ? ` · ${seats.size} seats` : ''}${C.x}`,
     `${C.dim}  seat    ${session.model} · mode ${session.mode}${C.x}`,
+    `${C.dim}  brain   ${commands.size} command(s) · ${session.skills.size} skill(s)`
+      + `${mcp?.report ? ` · mcp ${mcp.report}` : ''}${C.x}`,
+    ...(session.resumed
+      ? [`${C.g}  resumed ${resumeInfo ? resumeInfo.id.slice(0, 8) : ''} · `
+         + `${session.resumed.turns} prior turn(s)`
+         + `${session.resumed.dropped ? `, ${session.resumed.dropped} trimmed` : ''}${C.x}`]
+      : []),
     `${C.dim}  /help for commands, Ctrl+D to exit${C.x}`,
     '',
   ].join('\n')
@@ -79,7 +94,9 @@ export async function repl({ cwd, model, permissionMode }) {
     prompt: `${C.c}❯${C.x} `,
     historySize: 500,
     completer(line) {
-      const cmds = ['/help', '/seats', '/model', '/mode', '/clear', '/cost', '/exit']
+      const cmds = ['/help', '/seats', '/skills', '/mcp', '/model', '/mode',
+                    '/clear', '/cost', '/exit',
+                    ...[...commands.keys()].map((c) => `/${c}`)].sort()
       const hits = cmds.filter((c) => c.startsWith(line))
       return [hits.length ? hits : (line.startsWith('/') ? cmds : []), line]
     },
@@ -150,18 +167,39 @@ export async function repl({ cwd, model, permissionMode }) {
         stdout.write(`  ${session.turns} turn(s)\n  ${C.dim}${session.transcriptPath}${C.x}\n`)
         return true
 
+      case '/skills': {
+        if (!session.skills.size) { stdout.write('  (no skills in this config dir)\n'); return true }
+        for (const sk of session.skills.values()) {
+          stdout.write(`  ${C.b}${sk.name}${C.x}  ${C.dim}`
+            + `${(sk.whenToUse || sk.description).replace(/\s+/g, ' ').slice(0, 96)}${C.x}\n`)
+        }
+        stdout.write(`${C.dim}  the model loads one itself with the Skill tool${C.x}\n`)
+        return true
+      }
+
+      case '/mcp':
+        stdout.write(mcp?.servers?.length
+          ? mcp.servers.map((s) => `  ${s.name}  ${s.tools} tool(s)`).join('\n') + '\n'
+          : '  (no MCP servers configured or reachable)\n')
+        return true
+
       case '/exit':
       case '/quit':
         closing = true
         rl.close()
         return true
 
-      default:
-        if (cmd.startsWith('/')) {
-          stdout.write(`${C.r}  unknown command ${cmd}${C.x} — /help\n`)
-          return true
+      default: {
+        if (!cmd.startsWith('/')) return false
+        // A brain-authored command: expand its body and send it as the prompt.
+        const brainCmd = commands.get(cmd.slice(1))
+        if (brainCmd) {
+          stdout.write(`${C.dim}  → ${brainCmd.name}${C.x}\n`)
+          return { prompt: expandCommand(brainCmd, arg) }
         }
-        return false
+        stdout.write(`${C.r}  unknown command ${cmd}${C.x} — /help\n`)
+        return true
+      }
     }
   }
 
@@ -173,14 +211,17 @@ export async function repl({ cwd, model, permissionMode }) {
     const text = line.trim()
     if (!text) { prompt(); continue }
 
-    if (await handleCommand(text)) { prompt(); continue }
+    const handled = await handleCommand(text)
+    if (handled === true) { prompt(); continue }
+    // A brain command expands into a prompt; anything else is the prompt itself.
+    const toSend = (handled && handled.prompt) ? handled.prompt : text
 
     generating = new AbortController()
     // Pause input while the model streams: keystrokes typed mid-generation
     // would otherwise interleave with the output and land in the next prompt.
     rl.pause()
     try {
-      const res = await session.send(text, { signal: generating.signal })
+      const res = await session.send(toSend, { signal: generating.signal })
       if (res.blocked) {
         stdout.write(`${C.y}  blocked: ${res.reason}${C.x}\n`)
       } else if (res.exhausted) {
