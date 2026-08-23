@@ -62,7 +62,7 @@ flowchart LR
 
     subgraph ENGINE["⚙️ ENGINE — this repo"]
         direction TB
-        E1["agent loop · 13 tools<br/>hook dispatcher<br/>permissions · transcripts"]
+        E1["agent loop · 20 tools<br/>hook dispatcher<br/>permissions · transcripts"]
     end
 
     subgraph ROUTER["🔀 ROUTER — LiteLLM"]
@@ -337,6 +337,41 @@ A long page is trimmed by keeping the paragraphs most relevant to your `prompt`,
 contradicts its own structure. Truncation is always stated in the result: a
 model that does not know the page was cut answers as though it read all of it.
 
+### Work that outlives the call
+
+A plain `Bash` call waits for the process to exit, which for a dev server is
+never. So anything long-lived returns a job id instead:
+
+```
+❯ start the dev server and tell me when it is listening
+  ● Bash(npm run dev, run_in_background)  → [a3f21c9] started
+  ● Sleep(2)
+  ● BashOutput(a3f21c9)                   → listening on :3000
+```
+
+`Monitor` is the same thing named for its purpose (a watcher, a log tail);
+`Task(run_in_background)` does it for a subagent, polled with `TaskOutput`;
+`KillShell` stops any of them. `Sleep` waits without occupying a shell.
+
+Three properties are what make this safe to hand a model, and none is optional:
+
+- **Reads are cursor-based** — each call returns only what arrived since the
+  last one. Returning the whole buffer every time re-feeds output the model
+  already reasoned about, which is how a polling loop convinces itself nothing
+  is changing.
+- **Buffers are bounded** — a chatty process emits output forever, so each
+  stream keeps a rolling 256 KB tail, counts what it dropped, and *says so* on
+  read. A model reading a truncated log without knowing it was truncated
+  concludes the missing events never happened.
+- **Kills take the process group** — children are spawned detached, so
+  `KillShell` stops the tree. `npm run dev` is a shell that spawns node; killing
+  only the shell leaves the server holding the port, and the next run fails with
+  `EADDRINUSE` for reasons that look nothing like the cause.
+
+Everything still running is killed when the session ends, on every exit path
+including headless `-p`. A background process whose parent is gone is a leak the
+user finds later with `ps`.
+
 ## 4. What works, and what does not
 
 **Works:**
@@ -346,11 +381,24 @@ model that does not know the page was cut answers as though it read all of it.
   it
 - streaming completions against any OpenAI-compatible endpoint, with a request
   timeout and bounded jittered retry on transient failures
-- **13 tools** — `Bash` `Read` `Write` `Edit` `MultiEdit` `NotebookEdit` `Glob`
-  `Grep` `Task` `Explore` `ExitPlanMode` `WebSearch` `WebFetch`
+- **20 tools** — `Bash` `Read` `Write` `Edit` `MultiEdit` `NotebookEdit` `Glob`
+  `Grep` `Task` `Explore` `ExitPlanMode` `WebSearch` `WebFetch` `Monitor`
+  `BashOutput` `KillShell` `TaskOutput` `Sleep` `TodoWrite` `AskUserQuestion`
 - **web access** — `WebSearch` returns snippets, `WebFetch` reads a page. See
   [Reaching the web](#reaching-the-web) for the SSRF guard, which is the part
   that matters
+- **background execution** — `Bash(run_in_background)` and `Monitor` return a
+  job id instead of waiting; `BashOutput` reads what arrived since the last
+  read, `KillShell` stops it. See [Work that outlives the
+  call](#work-that-outlives-the-call)
+- **`TodoWrite`** — the plan as a list rather than as prose, so the brain's
+  gates can check it. Exactly one step may be `in_progress`, because a list that
+  does not say what is being worked on is not answering the question it exists
+  for
+- **`AskUserQuestion`** — a question with 2-4 options when the answer changes
+  what happens next. Headless it refuses and names the options rather than
+  picking one, because a tool that answers for the user is lying about what the
+  user decided
 - **all 13 hook events**, three deny protocols (`exit 2`,
   `{"decision":"block"}`, `hookSpecificOutput.permissionDecision`), and blocking
   `PostToolUse`
@@ -484,6 +532,8 @@ node tests/markdown.test.mjs           # rendered on a pty — the bugs are layo
 node tests/web.test.mjs                # WebFetch, WebSearch, and the SSRF guard
 node tests/repeat-guard.test.mjs       # a repeated tool call is flagged
 node tests/hook-contract.test.mjs      # no hook verdict is silently discarded
+node tests/background.test.mjs         # asserts the OS: pids gone, children reaped
+node tests/todo-ask.test.mjs           # one in_progress; headless never self-answers
 node tests/conformance/run.mjs --engine .   # 18 contract checks
 
 SERGE_WEB_LIVE=1 node tests/web.test.mjs    # adds two real network checks
