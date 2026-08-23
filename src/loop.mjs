@@ -67,7 +67,8 @@ function boundResult(name, content) {
  * the turn, which is what makes the second prompt aware of the first.
  */
 export function createSession({
-  cwd, model, onToken, onNotice, onTool, onToolResult, onAsk, permissionMode = 'default',
+  cwd, model, onToken, onNotice, onTool, onToolResult, onAsk, onQuestion, onTodos,
+  permissionMode = 'default',
   mcp = null, resumeFrom = null, forkParent = null, loadBrain = true,
 }) {
   const settings = loadSettings()
@@ -345,6 +346,13 @@ export function createSession({
 
       const out = await runTool(call.name, call.input, {
         cwd, depth: 0, spawnSubagent, mcp, sessionTools,
+        // The todo list is keyed by session, so two sessions in one process do
+        // not overwrite each other's plan.
+        sessionId,
+        onTodos: (t) => onTodos?.(t),
+        // AskUserQuestion needs someone to ask. Absent (headless), the tool
+        // says so and refuses rather than picking an answer nobody gave.
+        onQuestion: onQuestion ? (q) => onQuestion(q) : undefined,
         // Approving a plan is what ends plan mode — the tool cannot do it
         // itself, because the mode belongs to the session, not the call.
         onPlanApproved: () => { if (mode === 'plan') mode = 'acceptEdits' },

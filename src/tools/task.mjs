@@ -1,3 +1,4 @@
+import { startTask } from '../background.mjs'
 /**
  * Task — run a subagent on a scoped brief and return only its conclusion.
  *
@@ -65,6 +66,11 @@ export const task = {
           + 'the constraints, and exactly what to return.',
       },
       subagent_type: { type: 'string', description: 'Which specialist to use, if any.' },
+      run_in_background: {
+        type: 'boolean',
+        description: 'Return a job id immediately instead of waiting. Poll it with TaskOutput. '
+          + 'Use when the subagent is slow and you have other work to do meanwhile.',
+      },
     },
     required: ['prompt'],
   },
@@ -84,6 +90,22 @@ export const task = {
     }
 
     const label = String(input.description ?? input.subagent_type ?? 'subagent').slice(0, 60)
+
+    if (input.run_in_background) {
+      // The promise is registered and NOT awaited. Its rejection is handled
+      // inside startTask, so an unawaited failure becomes a readable job status
+      // rather than an unhandled rejection that takes the process down.
+      const { id } = startTask({
+        label,
+        description: String(input.description ?? ''),
+        promise: ctx.spawnSubagent({ prompt, label, agentType: input.subagent_type || null }),
+      })
+      return {
+        content: `[${id}] ${label} running in the background.\n`
+          + `Poll it with TaskOutput(task_id="${id}").`,
+      }
+    }
+
     const res = await ctx.spawnSubagent({
       prompt, label, agentType: input.subagent_type || null,
     })

@@ -13,6 +13,7 @@ import { loadSettings, providerConfig, configDir, VERSION } from './config.mjs'
 import { loadSeats, checkSeat, renderStartup } from './seats-startup.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
 import { listSessions } from './sessions.mjs'
+import { reapAll } from './background.mjs'
 import { App } from './ui/App.js'
 
 export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFrom = null, resumeInfo = null, forkParent = null }) {
@@ -29,6 +30,8 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
     // Without this the loop sees no `onAsk` and resolves every ask to a
     // refusal — correct headless, wrong with a person at the terminal.
     onAsk: (q) => session.ui?.onAsk?.(q) ?? Promise.resolve('no'),
+    onQuestion: (q) => session.ui?.onQuestion?.(q) ?? Promise.resolve(null),
+    onTodos: (t) => session.ui?.onTodos?.(t),
     onNotice: (m, kind) => session.ui?.onNotice?.(m, kind),
     onTool: (n, i) => session.ui?.onTool?.(n, i),
     onToolResult: (n, c, e) => session.ui?.onToolResult?.(n, c, e),
@@ -83,6 +86,12 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
   // rare enough event that it's not practically a big issue." It full-resets.
 
   await app.waitUntilExit()
+
+  // Kill anything still running in the background. A dev server whose parent is
+  // gone is a leak the user finds later with `ps`, holding a port nothing
+  // appears to own.
+  const reaped = reapAll()
+  if (reaped) stdout.write(`\x1b[2m  stopped ${reaped} background job(s)\x1b[0m\n`)
   // The FULL session id, and the command that resumes it. An 8-character
   // prefix reads like an id you can use and is not one you can paste — and a
   // transcript path is not a way back into the conversation. Printed on every

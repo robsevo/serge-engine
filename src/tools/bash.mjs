@@ -1,21 +1,42 @@
 import { spawnSync } from 'node:child_process'
+import { startShell } from '../background.mjs'
 
 const MAX = 30_000
 
 export const bash = {
   name: 'Bash',
-  description: 'Run a shell command and return its combined output.',
+  description: 'Run a shell command and return its combined output. '
+    + 'Set run_in_background for anything that does not end on its own — a dev server, '
+    + 'a watcher, a tail — and read it with BashOutput. A foreground call waits for the '
+    + 'process to exit, which for a server is never.',
   parameters: {
     type: 'object',
     properties: {
       command: { type: 'string', description: 'The shell command to run.' },
       timeout: { type: 'number', description: 'Timeout in milliseconds (default 120000).' },
+      run_in_background: {
+        type: 'boolean',
+        description: 'Return immediately with a job id instead of waiting. Read output with BashOutput, stop it with KillShell.',
+      },
+      description: { type: 'string', description: 'What this command does, in active voice.' },
     },
     required: ['command'],
   },
   run(input, ctx) {
     const cmd = String(input.command ?? '')
     if (!cmd.trim()) return { content: 'Bash: empty command', isError: true }
+
+    if (input.run_in_background) {
+      const r = startShell({
+        command: cmd, cwd: ctx.cwd,
+        description: String(input.description ?? ''), kind: 'bash',
+      })
+      if (r.error) return { content: `Bash (background) failed: ${r.error}`, isError: true }
+      return {
+        content: `[${r.id}] started in the background: ${cmd}\n`
+          + `Read new output with BashOutput(bash_id="${r.id}"), stop it with KillShell(shell_id="${r.id}").`,
+      }
+    }
 
     const r = spawnSync('bash', ['-c', cmd], {
       cwd: ctx.cwd,

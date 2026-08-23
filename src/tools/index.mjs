@@ -16,6 +16,9 @@ import { exitPlanMode } from './plan.mjs'
 import { notebookEdit } from './notebook.mjs'
 import { explore } from './explore.mjs'
 import { WebFetch, WebSearch } from './web.mjs'
+import { bashOutput, killShell, monitor, sleep, taskOutput } from './background.mjs'
+import { todoWrite } from './todo.mjs'
+import { askUserQuestion } from './ask.mjs'
 
 export const TOOLS = {
   Bash: bash,
@@ -31,6 +34,13 @@ export const TOOLS = {
   ExitPlanMode: exitPlanMode,
   WebFetch,
   WebSearch,
+  BashOutput: bashOutput,
+  KillShell: killShell,
+  Monitor: monitor,
+  Sleep: sleep,
+  TaskOutput: taskOutput,
+  TodoWrite: todoWrite,
+  AskUserQuestion: askUserQuestion,
 }
 
 /**

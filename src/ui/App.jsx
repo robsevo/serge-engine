@@ -6,6 +6,8 @@ import { StatusBar } from './StatusBar.jsx'
 import { Spinner } from './Spinner.jsx'
 import { PromptInput } from './PromptInput.jsx'
 import { PermissionPrompt } from './PermissionPrompt.jsx'
+import { QuestionPrompt } from './QuestionPrompt.jsx'
+import { Todos } from './Todos.jsx'
 import { Rule } from './Rule.jsx'
 import { POSES } from './Clawd.jsx'
 import { renderStatusLine } from '../statusline.mjs'
@@ -38,6 +40,8 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   // keypress far away in the component tree answer a promise the loop is
   // blocked on.
   const [ask, setAsk] = useState(null)
+  const [question, setQuestion] = useState(null)
+  const [todos, setTodos] = useState([])
   const [stream, setStream] = useState('')
   const streamBuf = useRef('')
   const history = useRef([])
@@ -223,6 +227,10 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       onAsk(q) {
         return new Promise((resolve) => setAsk({ ...q, resolve }))
       },
+      onQuestion(q) {
+        return new Promise((resolve) => setQuestion({ ...q, resolve }))
+      },
+      onTodos(t) { setTodos(t) },
     }
   }, [session, push])
 
@@ -245,6 +253,15 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       {repaint ? <Box height={(process.stdout.rows || 24) + 1} /> : null}
       <Static items={done}>{(m) => <Messages key={m.id} items={[m]} />}</Static>
       {busy && stream ? <Messages items={[{ id: 'stream', kind: 'text', text: stream }]} /> : null}
+      <Todos todos={todos} />
+      {question ? (
+        <QuestionPrompt
+          question={question.question}
+          header={question.header}
+          options={question.options}
+          onAnswer={(a) => { const r = question.resolve; setQuestion(null); r(a) }}
+        />
+      ) : null}
       {ask ? (
         <PermissionPrompt
           tool={ask.tool}

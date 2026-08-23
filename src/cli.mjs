@@ -11,6 +11,7 @@ import { MODES } from './permissions.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { listSessions, findSession, renderSessions } from './sessions.mjs'
 import { startMcp } from './mcp.mjs'
+import { reapAll } from './background.mjs'
 
 export async function main(argv = process.argv.slice(2)) {
   const has = (...f) => f.some((x) => argv.includes(x))
@@ -109,6 +110,7 @@ export async function main(argv = process.argv.slice(2)) {
       })
     } finally {
       mcp.stop()
+      reapAll()
     }
   }
 
@@ -156,6 +158,7 @@ export async function main(argv = process.argv.slice(2)) {
     return 1
   } finally {
     mcp.stop()
+    reapAll()
   }
 }
 
