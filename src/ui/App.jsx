@@ -74,21 +74,33 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   // wrapped a line nobody — Ink or caller — knows how many rows are really on
   // screen. Serge's own Ink fork reaches this conclusion too and full-resets on
   // any width change (log-update.ts:138).
+  // Driven by a COUNTER, not a boolean. setRepaint(true) while already true is
+  // a React no-op — no re-render, so the effect that clears it never re-ran and
+  // the spacer stuck on screen as a permanent gap. Dragging a window fires many
+  // resize events, so that state was reached immediately.
   const [cols, setCols] = useState(process.stdout.columns || 80)
-  const [repaint, setRepaint] = useState(false)
+  const [resizeTick, setResizeTick] = useState(0)
+  const [tall, setTall] = useState(false)
+
   useEffect(() => {
     const onResize = () => {
       setCols(process.stdout.columns || 80)
-      setRepaint(true)
+      setResizeTick((n) => n + 1)
     }
     process.stdout.on('resize', onResize)
     return () => { process.stdout.off('resize', onResize) }
   }, [])
+
   useEffect(() => {
-    if (!repaint) return
-    const t = setTimeout(() => setRepaint(false), 0)
+    if (!resizeTick) return
+    setTall(true)
+    // Long enough that Ink, which throttles renders, actually writes the tall
+    // frame — reverting in the same tick collapses both into one render and no
+    // clear happens at all. The cleanup makes a burst of resize events
+    // re-arm rather than pile up.
+    const t = setTimeout(() => setTall(false), 60)
     return () => clearTimeout(t)
-  }, [repaint])
+  }, [resizeTick])
 
   const verbs = useRef(loadSpinnerConfig(settings).verbs)
   const verb = useRef(verbs.current[0])
@@ -250,7 +262,7 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
     <Box flexDirection="column">
       {/* The over-tall frame: one render past the viewport, which is what makes
           Ink clear and replay everything. It is on screen for a single tick. */}
-      {repaint ? <Box height={(process.stdout.rows || 24) + 1} /> : null}
+      {tall ? <Box height={(process.stdout.rows || 24) + 1} /> : null}
       <Static items={done}>{(m) => <Messages key={m.id} items={[m]} />}</Static>
       {busy && stream ? <Messages items={[{ id: 'stream', kind: 'text', text: stream }]} /> : null}
       <Todos todos={todos} />
