@@ -67,7 +67,7 @@ export async function complete(opts) {
   throw lastErr
 }
 
-async function once({ baseUrl, apiKey, model, messages, tools, onToken, signal }) {
+async function once({ baseUrl, apiKey, model, messages, tools, onToken, onReasoning, signal }) {
   // Without this a stalled connection hangs the turn forever with no output.
   const timeout = signal ? undefined : AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
   const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -96,6 +96,7 @@ async function once({ baseUrl, apiKey, model, messages, tools, onToken, signal }
   }
 
   let text = ''
+  let reasoning = ''
   let finishReason = 'stop'
   let usage = null
   const calls = new Map()          // index -> {id, name, args}
@@ -115,6 +116,23 @@ async function once({ baseUrl, apiKey, model, messages, tools, onToken, signal }
     if (typeof d.content === 'string' && d.content) {
       text += d.content
       onToken?.(d.content)
+    }
+
+    // Reasoning seats stream their thinking in a SEPARATE field and may send
+    // little or no `content` until the end. Reading only `content` made a
+    // Magistral turn look frozen for its whole reasoning phase, and come back
+    // blank often enough that the Stop hook had to bounce it — which is the
+    // "wait, or ask it again" stall.
+    //
+    // `reasoning_content` and `reasoning` carry the SAME text (verified byte
+    // for byte on a live stream), so reading both would double it.
+    const think = typeof d.reasoning_content === 'string' ? d.reasoning_content
+      : typeof d.reasoning === 'string' ? d.reasoning : ''
+    if (think) {
+      reasoning += think
+      // Deliberately not onToken: this must never land in the transcript as
+      // the answer. It exists so the UI can show the turn is alive.
+      onReasoning?.(think)
     }
 
     // tool_calls arrive fragmented: the id and name land on the first delta for
@@ -139,7 +157,7 @@ async function once({ baseUrl, apiKey, model, messages, tools, onToken, signal }
       input: safeJson(c.args),
     }))
 
-  return { text, toolCalls, finishReason, usage }
+  return { text, reasoning, toolCalls, finishReason, usage }
 }
 
 function safeJson(s) {

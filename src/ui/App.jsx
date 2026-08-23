@@ -44,6 +44,8 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   const [todos, setTodos] = useState([])
   const [stream, setStream] = useState('')
   const streamBuf = useRef('')
+  const thinkChars = useRef(0)
+  const [thinking, setThinking] = useState(0)
   const history = useRef([])
   const idRef = useRef(0)
   const abortRef = useRef(null)
@@ -134,9 +136,10 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       setElapsed((Date.now() - startRef.current) / 1000)
       // Flush whatever arrived since the last tick, in one render.
       if (streamBuf.current !== stream) setStream(streamBuf.current)
+      if (thinkChars.current !== thinking) setThinking(thinkChars.current)
     }, 80)
     return () => clearInterval(t)
-  }, [busy, stream])
+  }, [busy, stream, thinking])
 
   const submit = useCallback(async (text) => {
     history.current.push(text)
@@ -166,6 +169,8 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
     setBusy(true)
     streamBuf.current = ''
     setStream('')
+    thinkChars.current = 0
+    setThinking(0)
     startRef.current = Date.now()
 
     // Let Ink PAINT the busy state before the blocking work starts.
@@ -236,6 +241,10 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       },
       onTokens(n) { setTokens(n) },
       onToken(chunk) { streamBuf.current += chunk },
+      // Counted, never shown. A reasoning seat can think for a long time before
+      // it writes anything; without a sign of life the turn reads as frozen.
+      // The text itself stays out of the UI — it is not the answer.
+      onReasoning(chunk) { thinkChars.current += chunk.length },
       onAsk(q) {
         return new Promise((resolve) => setAsk({ ...q, resolve }))
       },
@@ -288,6 +297,7 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
           verb={verb.current}
           seconds={Math.floor(elapsed)}
           tokens={tokens}
+          thinking={thinking}
         />
       ) : null}
       <SergeBar

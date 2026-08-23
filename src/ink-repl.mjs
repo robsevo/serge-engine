@@ -27,6 +27,7 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
   const session = createSession({
     cwd, model, permissionMode: permissionMode || 'default', mcp, resumeFrom, forkParent,
     onToken: (t) => session.ui?.onToken?.(t),
+    onReasoning: (t) => session.ui?.onReasoning?.(t),
     // Without this the loop sees no `onAsk` and resolves every ask to a
     // refusal — correct headless, wrong with a person at the terminal.
     onAsk: (q) => session.ui?.onAsk?.(q) ?? Promise.resolve('no'),

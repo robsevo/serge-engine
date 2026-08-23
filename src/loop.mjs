@@ -67,7 +67,7 @@ function boundResult(name, content) {
  * the turn, which is what makes the second prompt aware of the first.
  */
 export function createSession({
-  cwd, model, onToken, onNotice, onTool, onToolResult, onAsk, onQuestion, onTodos,
+  cwd, model, onToken, onReasoning, onNotice, onTool, onToolResult, onAsk, onQuestion, onTodos,
   permissionMode = 'default',
   mcp = null, resumeFrom = null, forkParent = null, loadBrain = true,
 }) {
@@ -245,7 +245,7 @@ export function createSession({
       // Task is replaced when agents exist, so the enum lists the real roster.
       tools: toolSchemas(null, extraSchemas)
         .map((t) => (sessionTools[t.function.name] ? asSchema(sessionTools[t.function.name]) : t)),
-      onToken, onNotice, signal,
+      onToken, onReasoning, onNotice, signal,
     })
     if (u) {
       usage.prompt += u.prompt_tokens ?? 0

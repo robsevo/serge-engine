@@ -42,7 +42,7 @@ const BLUE = '#6EB4E6'          // clawd_body — the wordmark's blue
  *   are derived from it rather than from a frame counter, so neither drifts if
  *   the render rate changes.
  */
-export function Spinner({ elapsedMs = 0, verb, seconds, tokens }) {
+export function Spinner({ elapsedMs = 0, verb, seconds, tokens, thinking = 0 }) {
   const eyes = FACE_FRAMES[Math.floor(elapsedMs / FACE_MS) % FACE_FRAMES.length]
   const spin = SPIN_FRAMES[Math.floor(elapsedMs / SPIN_MS) % SPIN_FRAMES.length]
   return (
@@ -50,6 +50,10 @@ export function Spinner({ elapsedMs = 0, verb, seconds, tokens }) {
       {/* eyes (3 cols) + space + spinner (1) = 5, fixed, so the verb never jitters */}
       <Text color={BLUE}>{`${eyes} ${spin} `}</Text>
       <Text color={BLUE}>{`${verb}… ${seconds}s`}</Text>
+      {/* A reasoning seat can think for many seconds before writing a word.
+          The COUNT is the sign of life — the text itself is not the answer and
+          does not belong on screen. */}
+      {thinking ? <Text dimColor>{` · reasoning ${thinking > 999 ? (thinking / 1000).toFixed(1) + 'k' : thinking} chars`}</Text> : null}
       {tokens ? <Text dimColor>{` · ${tokens}`}</Text> : null}
     </Box>
   )
