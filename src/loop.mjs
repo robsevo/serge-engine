@@ -86,6 +86,7 @@ export function createSession({
   let messages = []
   let mode = permissionMode
   let started = false
+  let userTurns = 0
   // "always allow" answers, scoped to this session. Kept here rather than
   // written to settings: a decision made to get one turn moving should not
   // quietly become permanent policy on disk.
@@ -212,6 +213,7 @@ export function createSession({
     transcript.userPrompt(prompt)
     for (const c of ups.context) messages.push({ role: 'system', content: c })
     messages.push({ role: 'user', content: prompt })
+    userTurns++
 
   let final = ''
   let stopHookActive = false
@@ -444,7 +446,11 @@ export function createSession({
     set model(m) { provider.model = m },
     get mode() { return mode },
     set mode(m) { mode = m },
-    get turns() { return messages.filter((m) => m.role === 'user').length },
+    // Counted explicitly, not derived from the message list. Everything the
+    // ENGINE injects — a Stop-hook bounce, the task-evidence gate, the todo
+    // nudge — is also role:'user', so filtering the list reported 2 turns for
+    // one question and made "N turn(s)" on exit meaningless.
+    get turns() { return userTurns },
     get usage() { return { ...usage } },
     /** Characters of live history — what the ctx% meter is a fraction of. */
     get contextChars() { return size(messages) },

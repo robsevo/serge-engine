@@ -97,12 +97,18 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
   // prefix reads like an id you can use and is not one you can paste — and a
   // transcript path is not a way back into the conversation. Printed on every
   // exit, including Ctrl+C, because that is the exit you did not plan for.
-  const resumeCmd = `serge --resume ${session.sessionId}`
-  stdout.write(
-    `\x1b[2m  session ${session.sessionId} · ${session.turns} turn(s)\n`
-    + `  ${session.transcriptPath}\x1b[0m\n`
-    + (session.turns > 0
-      ? `\x1b[2m  to resume:\x1b[0m \x1b[38;2;110;180;230m${resumeCmd}\x1b[0m\n`
-      : ''))
+  // A session with no turns has an empty transcript — there is nothing to
+  // resume and nothing worth reporting. Printing the id and path but silently
+  // omitting the resume line is the confusing middle: it looks like the feature
+  // broke rather than like there was nothing to offer.
+  if (session.turns === 0) {
+    stdout.write('\x1b[2m  no turns — nothing to resume\x1b[0m\n')
+  } else {
+    const resumeCmd = `serge --resume ${session.sessionId}`
+    stdout.write(
+      `\x1b[2m  session ${session.sessionId} · ${session.turns} turn(s)\n`
+      + `  ${session.transcriptPath}\x1b[0m\n`
+      + `\x1b[2m  to resume:\x1b[0m \x1b[38;2;110;180;230m${resumeCmd}\x1b[0m\n`)
+  }
   return 0
 }
