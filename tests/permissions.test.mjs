@@ -79,6 +79,24 @@ const CASES = [
   ['bypassPermissions refused when settings disable it',
     { tool: 'Write', input: { file_path: `${WS}/a.ts` }, mode: 'bypassPermissions', settings: settingsWith({ allowBypassPermissionsMode: false }) }, 'deny'],
 
+  // ── tilde paths ──────────────────────────────────────────────────────────
+  // A model writes `~/x` meaning home. If the tools expand it and the checker
+  // does not, the checker is reasoning about a path nothing will ever open —
+  // and a deny rule naming the real path silently fails to match.
+  ['a deny rule on the real path also catches the ~ form',
+    { tool: 'Write', input: { file_path: '~/.ssh/id_rsa' }, mode: 'fullAccess',
+      settings: settingsWith({ deny: [`Write(${process.env.HOME}/.ssh)`] }) }, 'deny'],
+  ['~ outside the workspace is still refused',
+    { tool: 'Write', input: { file_path: '~/.bashrc' } }, 'deny'],
+  // `~foo` is a legal directory name and resolving it to another account's
+  // home would be a guess — so it stays relative, which puts it INSIDE the
+  // workspace, which is an allowed read.
+  ['~foo stays literal and relative, so it reads fine',
+    { tool: 'Read', input: { file_path: '~foo/x' } }, 'allow'],
+  ['a deny rule still catches the literal ~foo path',
+    { tool: 'Read', input: { file_path: '~foo/x' },
+      settings: settingsWith({ deny: [`Read(${WS}/~foo)`] }) }, 'deny'],
+
   // ── hook integration ─────────────────────────────────────────────────────
   ['hook deny overrides fullAccess',
     { tool: 'Write', input: { file_path: `${WS}/a.ts` }, mode: 'fullAccess', hookDecision: 'deny', hookReason: 'gate said no' }, 'deny'],

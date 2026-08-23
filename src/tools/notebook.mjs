@@ -1,3 +1,4 @@
+import { resolvePath } from '../paths.mjs'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 
@@ -27,9 +28,7 @@ export const notebookEdit = {
     required: ['notebook_path'],
   },
   run(input, ctx) {
-    const p = isAbsolute(input.notebook_path ?? '')
-      ? input.notebook_path
-      : resolve(ctx.cwd, input.notebook_path ?? '')
+    const p = resolvePath(ctx.cwd, input.notebook_path)
     if (!existsSync(p)) return { content: `Notebook does not exist: ${p}`, isError: true }
 
     let nb

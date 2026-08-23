@@ -1,3 +1,4 @@
+import { resolvePath } from '../paths.mjs'
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { dirname, isAbsolute, resolve } from 'node:path'
 
@@ -13,7 +14,7 @@ export const write = {
     required: ['file_path', 'content'],
   },
   run(input, ctx) {
-    const p = isAbsolute(input.file_path ?? '') ? input.file_path : resolve(ctx.cwd, input.file_path ?? '')
+    const p = resolvePath(ctx.cwd, input.file_path)
     if (typeof input.content !== 'string') return { content: 'Write: content must be a string', isError: true }
     const existed = existsSync(p)
     mkdirSync(dirname(p), { recursive: true })

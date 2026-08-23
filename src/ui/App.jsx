@@ -5,6 +5,7 @@ import { SergeBar } from './SergeBar.jsx'
 import { StatusBar } from './StatusBar.jsx'
 import { Spinner } from './Spinner.jsx'
 import { PromptInput } from './PromptInput.jsx'
+import { PermissionPrompt } from './PermissionPrompt.jsx'
 import { Rule } from './Rule.jsx'
 import { POSES } from './Clawd.jsx'
 import { renderStatusLine } from '../statusline.mjs'
@@ -32,6 +33,11 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   // the animation tick — a setState per token re-renders the whole tree
   // hundreds of times a second, which is what made a turn feel like it froze
   // rather than typed.
+  // The permission question currently on screen, and the resolver that the
+  // engine's `onAsk` is awaiting. Holding the resolver in state is what lets a
+  // keypress far away in the component tree answer a promise the loop is
+  // blocked on.
+  const [ask, setAsk] = useState(null)
   const [stream, setStream] = useState('')
   const streamBuf = useRef('')
   const history = useRef([])
@@ -161,6 +167,9 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       },
       onTokens(n) { setTokens(n) },
       onToken(chunk) { streamBuf.current += chunk },
+      onAsk(q) {
+        return new Promise((resolve) => setAsk({ ...q, resolve }))
+      },
     }
   }, [session, push])
 
@@ -180,6 +189,14 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
     <Box flexDirection="column">
       <Static items={done}>{(m) => <Messages key={m.id} items={[m]} />}</Static>
       {busy && stream ? <Messages items={[{ id: 'stream', kind: 'text', text: stream }]} /> : null}
+      {ask ? (
+        <PermissionPrompt
+          tool={ask.tool}
+          input={ask.input}
+          reason={ask.reason}
+          onAnswer={(a) => { const r = ask.resolve; setAsk(null); r(a) }}
+        />
+      ) : null}
       {busy ? (
         <Spinner
           elapsedMs={elapsed * 1000}

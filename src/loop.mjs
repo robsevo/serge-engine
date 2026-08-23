@@ -141,20 +141,39 @@ export function createSession({
     // SubagentStop on `scout|researcher|Explore`, so passing a free-text label
     // would silently skip those gates.
     const matcher = agentType || label
-    runHooks('SubagentStart',
+    // A subagent sees no conversation, no CLAUDE.md and no memory — only its
+    // brief. So SubagentStart's context is the ONLY way the brain can hand it
+    // the repo card, the seat notes and the swarm doctrine. Discarding it, as
+    // this did until 2026-08-23, launches every specialist blind.
+    const ss = runHooks('SubagentStart',
       { ...base(), subagent_id: subId, subagent_type: matcher, prompt: brief }, matcher, settings)
+    const briefed = ss.context.length ? `${ss.context.join('\n\n')}\n\n${brief}` : brief
     try {
       const out = await subLoop({
-        brief, cwd, provider, settings, session, permissionMode, depth: 1,
+        brief: briefed, cwd, provider, settings, session, permissionMode, depth: 1,
         agent, tools, maxTurns,
       })
-      runHooks('SubagentStop', { ...base(), subagent_id: subId, subagent_type: matcher, last_assistant_message: out.text },
+      // SubagentStop is a GATE, not a notification: the brain's
+      // subagent-refs-gate can block a subagent that cited files it never read.
+      // Blocking after the fact cannot un-run it — what it does is stop the
+      // parent from building on an unsound result.
+      const sstop = runHooks('SubagentStop',
+        { ...base(), subagent_id: subId, subagent_type: matcher, last_assistant_message: out.text },
         matcher, settings)
+      if (sstop.blocked) {
+        return { ...out, text: `${out.text}\n\n--- BLOCKED BY SubagentStop HOOK ---\n${sstop.reason}` }
+      }
+      if (sstop.context.length) return { ...out, text: `${out.text}\n\n${sstop.context.join('\n')}` }
       return out
     } catch (e) {
-      runHooks('SubagentStop', { ...base(), subagent_id: subId, subagent_type: matcher, error: String(e?.message ?? e) },
+      // The subagent already failed, so there is nothing left to block — but a
+      // hook may still explain WHY, and that belongs with the error rather than
+      // in a discarded return value.
+      const failed = runHooks('SubagentStop',
+        { ...base(), subagent_id: subId, subagent_type: matcher, error: String(e?.message ?? e) },
         matcher, settings)
-      return { error: String(e?.message ?? e) }
+      const why = failed.context.length ? `\n\n${failed.context.join('\n')}` : ''
+      return { error: String(e?.message ?? e) + why }
     }
   }
 
@@ -212,7 +231,11 @@ export function createSession({
         messages = r.messages
         onNotice?.(`compacted context (-${r.droppedChars} chars)`, 'user')
       }
-      runHooks('PostCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
+      // compact-survival's whole job is to put back what the summary dropped.
+      // Running it and discarding its output is worse than not running it: the
+      // hook reports success and the context is gone anyway.
+      const pc = runHooks('PostCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
+      for (const c of pc.context) messages.push({ role: 'system', content: c })
     }
 
     const { text, toolCalls, usage: u } = await complete({
@@ -251,7 +274,16 @@ export function createSession({
         continue
       }
 
-      runHooks('TaskCompleted', { ...base(), last_assistant_message: text }, undefined, settings)
+      // TaskCompleted is the brain's task-evidence-gate — it can block a turn
+      // that claims a task is done without evidence. Discarding its verdict is
+      // what let "done" mean "the model said so".
+      const tc = runHooks('TaskCompleted', { ...base(), last_assistant_message: text }, undefined, settings)
+      if (tc.blocked && !stopHookActive) {
+        stopHookActive = true
+        onNotice?.(`task-completed gate: ${tc.reason}`, 'model')
+        messages.push({ role: 'user', content: tc.reason })
+        continue
+      }
       return { text: final, blocked: false }
     }
 

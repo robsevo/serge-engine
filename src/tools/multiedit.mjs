@@ -1,3 +1,4 @@
+import { resolvePath } from '../paths.mjs'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 
@@ -39,7 +40,7 @@ export const multiEdit = {
     required: ['file_path', 'edits'],
   },
   run(input, ctx) {
-    const p = isAbsolute(input.file_path ?? '') ? input.file_path : resolve(ctx.cwd, input.file_path ?? '')
+    const p = resolvePath(ctx.cwd, input.file_path)
     if (!existsSync(p)) return { content: `File does not exist: ${p}`, isError: true }
     const edits = Array.isArray(input.edits) ? input.edits : null
     if (!edits || !edits.length) return { content: 'MultiEdit: edits must be a non-empty array', isError: true }

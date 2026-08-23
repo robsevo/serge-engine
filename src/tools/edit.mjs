@@ -1,3 +1,4 @@
+import { resolvePath } from '../paths.mjs'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 
@@ -15,7 +16,7 @@ export const edit = {
     required: ['file_path', 'old_string', 'new_string'],
   },
   run(input, ctx) {
-    const p = isAbsolute(input.file_path ?? '') ? input.file_path : resolve(ctx.cwd, input.file_path ?? '')
+    const p = resolvePath(ctx.cwd, input.file_path)
     if (!existsSync(p)) return { content: `File does not exist: ${p}`, isError: true }
 
     const src = readFileSync(p, 'utf8')

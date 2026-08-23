@@ -1,3 +1,4 @@
+import { resolvePath } from '../paths.mjs'
 /**
  * Glob and Grep.
  *
@@ -74,7 +75,7 @@ export const glob = {
     required: ['pattern'],
   },
   run(input, ctx) {
-    const root = resolve(ctx.cwd, input.path || '.')
+    const root = resolvePath(ctx.cwd, input.path || '.')
     const re = globToRe(String(input.pattern ?? '*'))
     const files = walk(root)
       .filter((f) => re.test(relative(root, f).split(sep).join('/')))
@@ -109,7 +110,7 @@ export const grep = {
     required: ['pattern'],
   },
   run(input, ctx) {
-    const target = resolve(ctx.cwd, input.path || '.')
+    const target = resolvePath(ctx.cwd, input.path || '.')
     let re
     try {
       re = new RegExp(String(input.pattern), input.case_insensitive ? 'i' : '')

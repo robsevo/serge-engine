@@ -1,3 +1,4 @@
+import { resolvePath } from '../paths.mjs'
 import { readFileSync, existsSync, statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 
@@ -14,7 +15,7 @@ export const read = {
     required: ['file_path'],
   },
   run(input, ctx) {
-    const p = isAbsolute(input.file_path ?? '') ? input.file_path : resolve(ctx.cwd, input.file_path ?? '')
+    const p = resolvePath(ctx.cwd, input.file_path)
     if (!existsSync(p)) return { content: `File does not exist: ${p}`, isError: true }
     if (statSync(p).isDirectory()) return { content: `${p} is a directory, not a file`, isError: true }
 
