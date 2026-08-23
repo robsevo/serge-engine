@@ -544,11 +544,18 @@ node tests/markdown.test.mjs           # rendered on a pty — the bugs are layo
 node tests/web.test.mjs                # WebFetch, WebSearch, and the SSRF guard
 node tests/repeat-guard.test.mjs       # a repeated tool call is flagged
 node tests/hook-contract.test.mjs      # no hook verdict is silently discarded
+node tests/reasoning.test.mjs          # a reasoning seat does not come back blank
+node tests/resize-effect.test.mjs      # the repaint re-arms on every resize
 node tests/background.test.mjs         # asserts the OS: pids gone, children reaped
 node tests/todo-ask.test.mjs           # one in_progress; headless never self-answers
 node tests/conformance/run.mjs --engine .   # 18 contract checks
 
 SERGE_WEB_LIVE=1 node tests/web.test.mjs    # adds two real network checks
+
+# Needs a working install, so it is not in `npm test`. Drives a real session on
+# a pty, resizes it mid-turn, and asserts against the rendered SCREEN — the byte
+# stream cannot tell a frame redrawn in place from two frames stacked.
+python3 tests/tui/resize-check.py 110,70,130,88
 ```
 
 Every suite carries a `--self-test` that replaces the thing under test with a
