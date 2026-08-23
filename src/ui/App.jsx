@@ -111,6 +111,19 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
     streamBuf.current = ''
     setStream('')
     startRef.current = Date.now()
+
+    // Let Ink PAINT the busy state before the blocking work starts.
+    //
+    // runHooks uses spawnSync, and the brain wires 17 hooks to UserPromptSubmit
+    // — measured at 488ms of blocked event loop. setBusy(true) only schedules a
+    // React update; without this yield, session.send() blocks in the same tick
+    // and the spinner never appears until the hooks are done. Pressing Enter
+    // froze for half a second and then caught up, which is exactly what a
+    // blocked render loop looks like from the outside.
+    //
+    // A macrotask, not a microtask: React flushes and Ink writes the frame on
+    // the way through, and neither happens if we only await a resolved promise.
+    await new Promise((resolve) => setTimeout(resolve, 0))
     setFrame(0)
     setElapsed(0)
     setTokens('')
