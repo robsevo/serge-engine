@@ -25,7 +25,7 @@
 import { spawn } from 'node:child_process'
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { configDir } from './config.mjs'
+import { configDir, VERSION } from './config.mjs'
 import { HttpServer } from './mcp-http.mjs'
 
 const PROTOCOL_VERSION = '2024-11-05'
@@ -91,7 +91,7 @@ class StdioServer {
       await this.#request('initialize', {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { roots: { listChanged: false } },
-        clientInfo: { name: 'serge-engine', version: '0.1.0' },
+        clientInfo: { name: 'serge-engine', version: VERSION },
       }, HANDSHAKE_TIMEOUT_MS)
       this.#notify('notifications/initialized')
       const res = await this.#request('tools/list', {}, HANDSHAKE_TIMEOUT_MS)

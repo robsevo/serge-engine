@@ -8,7 +8,22 @@ import { readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
-export const VERSION = '0.1.0'
+/**
+ * The only version literal in the engine; five copies used to disagree.
+ * Read from package.json because that is what a release bumps.
+ * `../package.json` resolves the same from src/ and dist/.
+ * Falls back instead of throwing — a version is not worth failing a session for.
+ */
+function readVersion() {
+  try {
+    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+      || '0.0.0-unknown'
+  } catch {
+    return '0.0.0-unknown'
+  }
+}
+
+export const VERSION = readVersion()
 
 export function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.serge')

@@ -11,6 +11,7 @@
  * Palettes match the originals and are selectable with `SERGE_LOGO` (ember,
  * sunset, forest, ocean, monochrome). Colour degrades to plain text off a TTY.
  */
+import { VERSION } from './config.mjs'
 import { homedir } from 'node:os'
 import { clawd } from './clawd.mjs'
 
@@ -187,7 +188,7 @@ export function renderStartup({
  * and it is the line you scroll back to when a transcript gets long.
  */
 export function renderHeader({
-  version = '0.1.0', effort = '', cwd = '', pose = 'default', feetFrame = 0,
+  version = VERSION, effort = '', cwd = '', pose = 'default', feetFrame = 0,
   sprite = true, palette = null, color = true,
 } = {}) {
   const pl = resolvePalette(palette)

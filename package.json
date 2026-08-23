@@ -1,6 +1,6 @@
 {
   "name": "serge-engine",
-  "version": "0.0.0",
+  "version": "0.4.0",
   "private": true,
   "description": "An MIT-licensed, Claude Code-compatible agent engine for serge-public.",
   "license": "MIT",
@@ -13,7 +13,7 @@
     "conformance:self-test": "node tests/conformance/run.mjs --self-test",
     "build": "node scripts/build.mjs",
     "start": "node dist/cli.mjs",
-    "test": "node tests/tools.test.mjs && node tests/permissions.test.mjs && node tests/commands.test.mjs && node tests/menu-render.test.mjs && node tests/repeat-guard.test.mjs && node tests/markdown.test.mjs && node tests/hook-contract.test.mjs && node tests/web.test.mjs && node tests/background.test.mjs && node tests/todo-ask.test.mjs",
+    "test": "node tests/tools.test.mjs && node tests/permissions.test.mjs && node tests/commands.test.mjs && node tests/menu-render.test.mjs && node tests/repeat-guard.test.mjs && node tests/markdown.test.mjs && node tests/hook-contract.test.mjs && node tests/web.test.mjs && node tests/background.test.mjs && node tests/todo-ask.test.mjs && node tests/version.test.mjs",
     "test:self-test": "node tests/permissions.test.mjs --self-test",
     "test:tools": "node tests/tools.test.mjs"
   },

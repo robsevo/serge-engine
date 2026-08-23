@@ -103,7 +103,7 @@ export class HttpServer {
       params: {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: 'serge-engine', version: '0.1.0' },
+        clientInfo: { name: 'serge-engine', version: VERSION },
       },
     }, HANDSHAKE_TIMEOUT_MS)
     if (r.error) throw new Error(r.error.message || 'initialize failed')
@@ -188,7 +188,7 @@ export class HttpServer {
     await this.#sseRequest('initialize', {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: 'serge-engine', version: '0.1.0' },
+      clientInfo: { name: 'serge-engine', version: VERSION },
     }, HANDSHAKE_TIMEOUT_MS)
     await this.#ssePost({ jsonrpc: '2.0', method: 'notifications/initialized' }).catch(() => {})
   }
