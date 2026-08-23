@@ -28,6 +28,12 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   const [ctx, setCtx] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [tokens, setTokens] = useState('')
+  // The reply as it arrives. Tokens land in a ref and are flushed to state on
+  // the animation tick — a setState per token re-renders the whole tree
+  // hundreds of times a second, which is what made a turn feel like it froze
+  // rather than typed.
+  const [stream, setStream] = useState('')
+  const streamBuf = useRef('')
   const history = useRef([])
   const idRef = useRef(0)
   const abortRef = useRef(null)
@@ -51,18 +57,24 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
 
   useEffect(() => { refreshStatus() }, [refreshStatus])
 
-  // One timer drives the whole animation: pose, feet, spinner and clock.
+  // One timer drives the whole animation: mascot pose, feet, spinner and clock.
+  // 80ms because that is the braille spinner's own tick — a slower interval
+  // aliases it and the spin visibly stutters. The eyes run at 120ms off the
+  // same elapsed clock rather than a second timer, which is what keeps the two
+  // cadences independent without two intervals fighting for renders.
   useEffect(() => {
     if (!busy) return
     const t = setInterval(() => {
       setFrame((f) => {
-        if (f % 70 === 0) verb.current = verbs.current[Math.floor(Math.random() * verbs.current.length)]
+        if (f % 88 === 0) verb.current = verbs.current[Math.floor(Math.random() * verbs.current.length)]
         return f + 1
       })
       setElapsed((Date.now() - startRef.current) / 1000)
-    }, 100)
+      // Flush whatever arrived since the last tick, in one render.
+      if (streamBuf.current !== stream) setStream(streamBuf.current)
+    }, 80)
     return () => clearInterval(t)
-  }, [busy])
+  }, [busy, stream])
 
   const submit = useCallback(async (text) => {
     history.current.push(text)
@@ -90,6 +102,8 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
     }
 
     setBusy(true)
+    streamBuf.current = ''
+    setStream('')
     startRef.current = Date.now()
     setFrame(0)
     setElapsed(0)
@@ -100,6 +114,11 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       const res = await session.send(text, { signal: abortRef.current.signal })
       if (res.blocked) push({ kind: 'notice', text: `blocked: ${res.reason}`, tone: 'warn' })
       else if (res.text) push({ kind: 'text', text: res.text })
+      // The live region held the same text while it streamed; clearing it here
+      // (after the committed copy is pushed) is what hands the reply over to
+      // scrollback. Clearing earlier makes it flicker out and back in.
+      streamBuf.current = ''
+      setStream('')
       const u = session.usage
       const spent = (u.prompt + u.completion) - (before.prompt + before.completion)
       push({ kind: 'done', seconds: (Date.now() - startRef.current) / 1000, spent })
@@ -109,6 +128,8 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       }
     } finally {
       setBusy(false)
+      streamBuf.current = ''
+      setStream('')
       abortRef.current = null
       refreshStatus()
     }
@@ -139,6 +160,7 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
         push({ kind: 'notice', text: m })
       },
       onTokens(n) { setTokens(n) },
+      onToken(chunk) { streamBuf.current += chunk },
     }
   }, [session, push])
 
@@ -157,9 +179,10 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   return (
     <Box flexDirection="column">
       <Static items={done}>{(m) => <Messages key={m.id} items={[m]} />}</Static>
+      {busy && stream ? <Messages items={[{ id: 'stream', kind: 'text', text: stream }]} /> : null}
       {busy ? (
         <Spinner
-          frame={frame}
+          elapsedMs={elapsed * 1000}
           verb={verb.current}
           seconds={Math.floor(elapsed)}
           tokens={tokens}

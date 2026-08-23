@@ -25,6 +25,7 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
   // read it lazily rather than capturing it.
   const session = createSession({
     cwd, model, permissionMode: permissionMode || 'default', mcp, resumeFrom, forkParent,
+    onToken: (t) => session.ui?.onToken?.(t),
     onNotice: (m, kind) => session.ui?.onNotice?.(m, kind),
     onTool: (n, i) => session.ui?.onTool?.(n, i),
     onToolResult: (n, c, e) => session.ui?.onToolResult?.(n, c, e),

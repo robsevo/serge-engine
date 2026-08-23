@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text } from 'ink'
+import { renderMarkdown } from './markdown.jsx'
 
 /**
  * The transcript — ported from serge's message components.
@@ -49,7 +50,7 @@ function AssistantText({ text }) {
   return (
     <Box flexDirection="row" marginTop={1}>
       <Box minWidth={2}><Text>{BLACK_CIRCLE}</Text></Box>
-      <Box flexGrow={1}><Text>{text}</Text></Box>
+      <Box flexGrow={1} flexDirection="column">{renderMarkdown(text)}</Box>
     </Box>
   )
 }

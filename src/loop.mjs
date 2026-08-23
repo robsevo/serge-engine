@@ -168,8 +168,15 @@ export function createSession({
     // hooks load memory, the repo card and the reasoning overlay, and re-running
     // them every turn would re-inject the same context indefinitely.
     if (!started) {
-      runHooks('SessionStart', { ...base(), source: resumed ? 'resume' : 'startup' },
-        resumed ? 'resume' : 'startup', settings)
+      const src = resumed ? 'resume' : 'startup'
+      const ss = runHooks('SessionStart', { ...base(), source: src }, src, settings)
+      // SessionStart's context is what the brain KNOWS: memory-load carries the
+      // memories, repo-card the project, progress/reflexion what the last
+      // session left. Running these and dropping their output — which is what
+      // happened until 2026-08-23 — is a 25KB-per-session silent amnesia: the
+      // hooks all fire, nothing they say reaches the model, and the only symptom
+      // is an agent that has read nothing.
+      for (const c of ss.context) messages.push({ role: 'system', content: c })
       const idx = skillIndex(skills)
       if (idx) messages.push({ role: 'system', content: idx })
       started = true
