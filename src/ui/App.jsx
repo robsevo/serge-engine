@@ -46,6 +46,46 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   const startRef = useRef(0)
   const { exit } = useApp()
 
+  // Re-render on resize.
+  //
+  // Ink's own resize handler calls onRender, but the React tree it renders is
+  // identical, so the output string matches what it last wrote and log-update
+  // skips the write. The rules then keep the width they were drawn at: a
+  // 129-column rule left on a 95-column terminal wraps into 95 + 34, which is
+  // the doubled-rule overlap you see after dragging the window.
+  //
+  // Bumping state makes the frame genuinely different, so it is actually
+  // written. `Rule` reads stdout.columns at render time, so one bump is enough
+  // for every width-dependent component.
+  // A resize renders ONE deliberately over-tall frame, then returns to normal.
+  //
+  // Ink already knows how to repaint correctly — ink.js:768 writes
+  // `clearTerminal + fullStaticOutput + outputToRender`, wiping the screen and
+  // replaying the entire transcript at the new width. It just only takes that
+  // path when a frame overflows the viewport (ink.js:104), which this one never
+  // does. Making one frame overflow on purpose is how you ask for it.
+  //
+  // Everything else fails for the same underlying reason: Ink's erase counts
+  // STRING lines, not terminal rows (log-update.js:47), so once a reflow has
+  // wrapped a line nobody — Ink or caller — knows how many rows are really on
+  // screen. Serge's own Ink fork reaches this conclusion too and full-resets on
+  // any width change (log-update.ts:138).
+  const [cols, setCols] = useState(process.stdout.columns || 80)
+  const [repaint, setRepaint] = useState(false)
+  useEffect(() => {
+    const onResize = () => {
+      setCols(process.stdout.columns || 80)
+      setRepaint(true)
+    }
+    process.stdout.on('resize', onResize)
+    return () => { process.stdout.off('resize', onResize) }
+  }, [])
+  useEffect(() => {
+    if (!repaint) return
+    const t = setTimeout(() => setRepaint(false), 0)
+    return () => clearTimeout(t)
+  }, [repaint])
+
   const verbs = useRef(loadSpinnerConfig(settings).verbs)
   const verb = useRef(verbs.current[0])
 
@@ -200,6 +240,9 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
 
   return (
     <Box flexDirection="column">
+      {/* The over-tall frame: one render past the viewport, which is what makes
+          Ink clear and replay everything. It is on screen for a single tick. */}
+      {repaint ? <Box height={(process.stdout.rows || 24) + 1} /> : null}
       <Static items={done}>{(m) => <Messages key={m.id} items={[m]} />}</Static>
       {busy && stream ? <Messages items={[{ id: 'stream', kind: 'text', text: stream }]} /> : null}
       {ask ? (

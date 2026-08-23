@@ -71,25 +71,28 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
   //
   // Clearing on ANY width change costs one redraw of a region that is about to
   // be redrawn regardless.
-  let lastCols = stdout.columns
-  const onResize = () => {
-    if (stdout.columns === lastCols) return      // a height-only change is safe
-    lastCols = stdout.columns
-    // PREPENDED, so this runs BEFORE Ink's own resize handler. Ink's handler
-    // repaints; clearing after it wiped the fresh frame and left the input box
-    // gone, because instance.clear() also SYNCS Ink's idea of what is on screen
-    // (ink.js:657) — after which Ink believes the blank screen is correct and
-    // never redraws. Clearing first leaves Ink's repaint as the last write.
-    app.clear()
-  }
-  stdout.prependListener('resize', onResize)
+  // Resize is handled inside the App (ui/App.jsx) by triggering Ink's own
+  // full-repaint path, which replays the whole transcript. Erasing by hand from
+  // out here cannot work: Ink counts STRING lines, not terminal rows
+  // (log-update.js:47), so after a reflow neither Ink nor a caller knows how
+  // many rows are actually on screen without re-deriving the wrapping.
+  //
+  // Serge's own Ink fork reaches the same conclusion in log-update.ts:138 —
+  // "we could figure out how to not reset here but that would involve
+  // predicting the current layout after the viewport change ... resizing is a
+  // rare enough event that it's not practically a big issue." It full-resets.
 
-  try {
-    await app.waitUntilExit()
-  } finally {
-    stdout.off('resize', onResize)
-  }
-  stdout.write(`\x1b[2m  session ${session.sessionId.slice(0, 8)} · ${session.turns} turn(s)\n`
-    + `  ${session.transcriptPath}\x1b[0m\n`)
+  await app.waitUntilExit()
+  // The FULL session id, and the command that resumes it. An 8-character
+  // prefix reads like an id you can use and is not one you can paste — and a
+  // transcript path is not a way back into the conversation. Printed on every
+  // exit, including Ctrl+C, because that is the exit you did not plan for.
+  const resumeCmd = `serge --resume ${session.sessionId}`
+  stdout.write(
+    `\x1b[2m  session ${session.sessionId} · ${session.turns} turn(s)\n`
+    + `  ${session.transcriptPath}\x1b[0m\n`
+    + (session.turns > 0
+      ? `\x1b[2m  to resume:\x1b[0m \x1b[38;2;110;180;230m${resumeCmd}\x1b[0m\n`
+      : ''))
   return 0
 }

@@ -17,7 +17,12 @@ export function Rule({ palette = null }) {
   // `?? 80` does not catch a reported width of 0, which is what a pty with no
   // window size gives — the rule then collapsed to its 8-column floor. `||`
   // treats 0 as absent, which is the intent.
-  const cols = Math.max(20, stdout?.columns || process.stdout.columns || 80)
+  // ONE COLUMN SHORT of the terminal, deliberately. A line of exactly `cols`
+  // characters puts the cursor past the last column; terminals defer the wrap,
+  // and Ink counts the line as one row while the screen may hold two. Its erase
+  // then falls short by a row per rule, which is how a resize left the old
+  // narrow rules sitting under the new wide ones.
+  const cols = Math.max(20, (stdout?.columns || process.stdout.columns || 80) - 1)
   const stops = resolvePalette(palette).gradient
   return (
     <Box>
