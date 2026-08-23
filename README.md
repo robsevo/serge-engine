@@ -62,7 +62,7 @@ flowchart LR
 
     subgraph ENGINE["⚙️ ENGINE — this repo"]
         direction TB
-        E1["agent loop · 10 tools<br/>hook dispatcher<br/>permissions · transcripts"]
+        E1["agent loop · 13 tools<br/>hook dispatcher<br/>permissions · transcripts"]
     end
 
     subgraph ROUTER["🔀 ROUTER — LiteLLM"]
@@ -297,6 +297,46 @@ That last row is the one that matters: a broken scroll region outlives the
 process and hands the user a shell that scrolls wrong. Verified on all three
 paths — clean exit, uncaught throw, and `SIGTERM`.
 
+### Reaching the web
+
+`WebSearch` returns **snippets** — a title, a URL, and one line of preview.
+A snippet is not a source. `WebFetch` is how you read one:
+
+```
+❯ what changed in the Tavily rate limits?
+  ● WebSearch(Tavily API rate limits per minute)
+  ● WebFetch  https://www.tavily.com/pricing  (redirected from https://tavily.com)
+```
+
+Search needs `TAVILY_API_KEY` in the environment; when it is missing the tool
+says so **and names the variable**, because a model told only "search failed"
+retries forever. `WebFetch` needs no key, so a known URL is still readable.
+
+**The SSRF guard is the part that matters.** These are the only tools whose
+target is chosen by the model, and that target can come from a page the model
+just read. Without a guard, "summarise this link" is a path to the cloud
+metadata endpoint. So `src/net.mjs`:
+
+- resolves the hostname and checks **the resolved address**, not the name —
+  `evil.test` can have an `A` record of `127.0.0.1`
+- requires **every** returned address to be public, so a host with one public
+  and one loopback record is not a coin flip decided by resolver ordering
+- refuses loopback, private, carrier-grade NAT, link-local (`169.254.0.0/16`,
+  where cloud metadata lives), unique-local and multicast, in v4 and v6 —
+  including IPv4-mapped v6 in **both** spellings, since the URL parser rewrites
+  `[::ffff:127.0.0.1]` to `[::ffff:7f00:1]` before your guard ever sees it
+- allows only `http` and `https`; `file:` through a "web" tool would read the
+  disk without ever meeting the permission system's workspace boundary
+- follows redirects **one hop at a time, re-checking each**, because a public
+  URL that 302s somewhere private is the standard bypass
+- caps the response at 5 MB and the whole exchange at 30s, so a server that
+  streams forever is neither a hang nor an out-of-memory crash
+
+A long page is trimmed by keeping the paragraphs most relevant to your `prompt`,
+**in document order** — reordering by score hands the model a page that
+contradicts its own structure. Truncation is always stated in the result: a
+model that does not know the page was cut answers as though it read all of it.
+
 ## 4. What works, and what does not
 
 **Works:**
@@ -306,8 +346,11 @@ paths — clean exit, uncaught throw, and `SIGTERM`.
   it
 - streaming completions against any OpenAI-compatible endpoint, with a request
   timeout and bounded jittered retry on transient failures
-- **10 tools** — `Bash` `Read` `Write` `Edit` `MultiEdit` `NotebookEdit` `Glob`
-  `Grep` `Task` `ExitPlanMode`
+- **13 tools** — `Bash` `Read` `Write` `Edit` `MultiEdit` `NotebookEdit` `Glob`
+  `Grep` `Task` `Explore` `ExitPlanMode` `WebSearch` `WebFetch`
+- **web access** — `WebSearch` returns snippets, `WebFetch` reads a page. See
+  [Reaching the web](#reaching-the-web) for the SSRF guard, which is the part
+  that matters
 - **all 13 hook events**, three deny protocols (`exit 2`,
   `{"decision":"block"}`, `hookSpecificOutput.permissionDecision`), and blocking
   `PostToolUse`
@@ -353,9 +396,9 @@ paths — clean exit, uncaught throw, and `SIGTERM`.
   transcript that points back at the original. The parent is never appended to,
   so it can be forked again, and replay walks the chain rather than copying it
 
-- **a pinned status pane** — the last two rows are reserved and never scroll:
-  a rule, then live seat, mode, turn count, token total, and the spinner while a
-  turn runs
+- **a live footer** — finished turns are committed to scrollback once and never
+  redrawn; only the bottom region repaints, carrying the mascot, a gradient
+  rule, the input, and live seat / mode / token totals
 
 **Does not, stated plainly so nobody discovers it later:**
 
@@ -390,7 +433,7 @@ written by hand.
 ## 6. Verification
 
 ```bash
-node tests/tools.test.mjs              # 20 assertions across the 10 tools
+node tests/tools.test.mjs              # assertions across the built-in tools
 node tests/permissions.test.mjs        # 28-case permission matrix
 node tests/conformance/run.mjs --engine .   # 18 contract checks
 ```

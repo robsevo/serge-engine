@@ -15,6 +15,7 @@ import { task } from './task.mjs'
 import { exitPlanMode } from './plan.mjs'
 import { notebookEdit } from './notebook.mjs'
 import { explore } from './explore.mjs'
+import { WebFetch, WebSearch } from './web.mjs'
 
 export const TOOLS = {
   Bash: bash,
@@ -28,10 +29,16 @@ export const TOOLS = {
   Task: task,
   Explore: explore,
   ExitPlanMode: exitPlanMode,
+  WebFetch,
+  WebSearch,
 }
 
-/** A subagent gets read + search only: no mutations, no nested delegation. */
-export const SUBAGENT_TOOLS = ['Read', 'Grep', 'Glob', 'Bash']
+/**
+ * A subagent gets read + search only: no mutations, no nested delegation.
+ * The web tools are included because the `researcher` agent exists to go and
+ * read sources — without them it is a specialist that cannot do its one job.
+ */
+export const SUBAGENT_TOOLS = ['Read', 'Grep', 'Glob', 'Bash', 'WebFetch', 'WebSearch']
 
 /**
  * OpenAI-compatible function schemas.

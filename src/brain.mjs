@@ -129,8 +129,17 @@ export function skillIndex(skills) {
     const trigger = (s.whenToUse || s.description || '').replace(/\s+/g, ' ')
     return `- ${s.name}: ${trigger.slice(0, 220)}`
   })
-  return 'Skills available in this workspace. Load one with the Skill tool when the '
-    + 'task matches — the body carries procedures the general answer will miss.\n\n'
+  // The DIRECTORY is part of the index. Without it the model knows 21 skills
+  // exist and has no idea where — observed 2026-08-23, when "what skills do you
+  // have" produced Glob("skills/**/*") against the user's home directory, found
+  // nothing, and answered from the index alone. Naming the path lets it Read a
+  // SKILL.md instead of guessing at one.
+  const dir = join(configDir(), 'skills')
+  return 'Skills available in this workspace, in ' + dir + '/<name>/SKILL.md. '
+    + 'Load one with the Skill tool when the task matches — the body carries '
+    + 'procedures the general answer will miss. To answer questions ABOUT the '
+    + 'skills themselves, read them from that path; do not search for them '
+    + 'relative to the working directory, which is not where they live.\n\n'
     + lines.join('\n')
 }
 
