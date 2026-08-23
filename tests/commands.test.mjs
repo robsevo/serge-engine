@@ -18,6 +18,9 @@ const ok = (name, cond, detail = '') => {
 
 const brain = new Map([
   ['review', { name: 'review', description: 'review the diff', body: 'Review: $ARGUMENTS' }],
+  // No placeholder anywhere in the body. Eight of twenty real command files
+  // were shaped like this, /sc:research among them.
+  ['research', { name: 'research', description: 'deep research', body: 'Do deep research.' }],
   ['help', { name: 'help', description: 'a brain file shadowing a built-in', body: 'x' }],
 ])
 
@@ -96,6 +99,20 @@ const r = dispatch('/review the auth diff', ctx)
 ok('a brain command returns a prompt', typeof r.prompt === 'string')
 ok('its $ARGUMENTS expand', r.prompt.includes('the auth diff'), r.prompt)
 ok('a built-in beats a brain file of the same name', !dispatch('/help', ctx).prompt)
+
+// A body with NO placeholder must still receive the argument. It used to be
+// dropped in silence: `/sc:research "<question>"` reached the model as the bare
+// instructions, so it asked which topic and then answered one nobody had asked.
+const np = dispatch('/research "does the switch dongle still work on 21.2.0"', ctx)
+ok('a placeholder-less command still gets the argument',
+   np.prompt.includes('does the switch dongle still work on 21.2.0'), np.prompt)
+ok('and keeps its own body', np.prompt.startsWith('Do deep research.'), np.prompt)
+ok('the argument is appended, not interpolated mid-body',
+   np.prompt.indexOf('Do deep research.') < np.prompt.indexOf('does the switch'), np.prompt)
+const bare = dispatch('/research', ctx)
+ok('no argument leaves the body untouched', bare.prompt === 'Do deep research.', bare.prompt)
+ok('a placeholder command is unchanged by the fix',
+   dispatch('/review the auth diff', ctx).prompt === 'Review: the auth diff')
 
 const total = pass + fails.length
 console.log(`\n  ${pass}/${total} passed`)

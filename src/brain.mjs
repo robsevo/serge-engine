@@ -143,12 +143,27 @@ export function skillIndex(skills) {
     + lines.join('\n')
 }
 
-/** `$ARGUMENTS` / `$1`-style expansion for a slash command body. */
+/**
+ * `$ARGUMENTS` / `$1`-style expansion for a slash command body.
+ *
+ * A body with no placeholder gets the argument APPENDED rather than dropped.
+ * Substituting only where a placeholder exists means a command file that forgot
+ * one silently discards whatever the user typed: `/sc:research "<a real
+ * question>"` reached the model as the bare research instructions with no topic
+ * at all, so it asked which topic — and, dismissed, answered a question nobody
+ * had asked. Eight of twenty command files were in that state, and none of them
+ * looked wrong. Appending makes the placeholder an option for POSITIONING the
+ * argument, never a requirement for receiving it.
+ */
 export function expandCommand(cmd, args) {
-  const argv = args.trim() ? args.trim().split(/\s+/) : []
-  return cmd.body
-    .replace(/\$ARGUMENTS\b/g, args.trim())
+  const arg = args.trim()
+  const argv = arg ? arg.split(/\s+/) : []
+  const hasPlaceholder = /\$ARGUMENTS\b|\$\d/.test(cmd.body)
+  const body = cmd.body
+    .replace(/\$ARGUMENTS\b/g, arg)
     .replace(/\$(\d+)/g, (_, n) => argv[Number(n) - 1] ?? '')
+  if (hasPlaceholder || !arg) return body
+  return body.trimEnd() + '\n\n' + arg
 }
 
 /**
