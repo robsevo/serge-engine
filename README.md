@@ -399,11 +399,53 @@ model that does not know the page was cut answers as though it read all of it.
 - **a live footer** — finished turns are committed to scrollback once and never
   redrawn; only the bottom region repaints, carrying the mascot, a gradient
   rule, the input, and live seat / mode / token totals
+- **the reply as it arrives** — tokens are buffered and flushed on the
+  animation tick. A `setState` per token re-renders the tree hundreds of times a
+  second, which reads as a freeze rather than as typing
+- **markdown, rendered** — bold, italic, code, headings, bullets, ordered lists
+  and rules. Fenced code stays verbatim, because a model showing you a literal
+  `**` means it
+- **a permission prompt** — `y` allow once, `a` allow that tool for the session,
+  `n` decline. `ask` means *a human could answer this*; resolving it to a
+  refusal is only correct when there is nobody to ask
+- **`~` that means home** — one resolver, shared by every tool *and* by the
+  permission checker. Split, they disagree: a deny rule on `/home/u/.ssh` will
+  not match a call written `~/.ssh`, so the rule looks present and does nothing
+
+**Resize.** Any width change triggers a full repaint. This is not laziness — it
+is the only correct answer available, and serge's own Ink fork reaches it too
+(`log-update.ts:138`: *"predicting the current layout after the viewport change
+… means calculating text wrapping. Resizing is a rare enough event"*).
+
+Ink tracks `previousLineCount = lines.length` — **string lines, not terminal
+rows** (`log-update.js:47`). Once a reflow wraps a line, one string-line
+occupies two rows, so `eraseLines()` is short by one row per wrapped line and
+strands the top of the old frame above the new one. No caller can correct that
+from outside, because nobody knows the real row count without re-deriving the
+wrapping. Erasing harder just adds a second bug where the input vanishes.
+
+Ink already implements the fix at `ink.js:768` — `clearTerminal +
+fullStaticOutput + outputToRender`, which wipes the screen and replays the whole
+transcript at the new width. It only takes that path when a frame overflows the
+viewport, so a resize renders one deliberately over-tall frame to ask for it.
+
+**Leaving.** Every exit — `Ctrl+C` included — prints the full session id and the
+command that resumes it:
+
+```
+  session 4f07a7ea-5e35-4703-8620-108b8e9f82a4 · 6 turn(s)
+  to resume: serge --resume 4f07a7ea-5e35-4703-8620-108b8e9f82a4
+```
+
+The **full** id, not a prefix: a prefix reads like something you can use and is
+not something you can paste, and a transcript path is not a way back into the
+conversation.
 
 **Does not, stated plainly so nobody discovers it later:**
 
 - no mouse support, and no multi-column layout — one scrolling region and one
-  pinned pane, not a window manager
+  live footer, not a window manager
+- a resize repaints the whole screen, which flickers once
 - no OAuth for remote MCP servers — bearer tokens via `headers` only
 
 ## 5. The contract
@@ -433,9 +475,18 @@ written by hand.
 ## 6. Verification
 
 ```bash
+npm test                               # every suite below, in order
 node tests/tools.test.mjs              # assertions across the built-in tools
-node tests/permissions.test.mjs        # 28-case permission matrix
+node tests/permissions.test.mjs        # permission matrix, incl. ~ resolution
+node tests/commands.test.mjs           # every name `/` offers actually dispatches
+node tests/menu-render.test.mjs        # the menu, rendered on a pty
+node tests/markdown.test.mjs           # rendered on a pty — the bugs are layout bugs
+node tests/web.test.mjs                # WebFetch, WebSearch, and the SSRF guard
+node tests/repeat-guard.test.mjs       # a repeated tool call is flagged
+node tests/hook-contract.test.mjs      # no hook verdict is silently discarded
 node tests/conformance/run.mjs --engine .   # 18 contract checks
+
+SERGE_WEB_LIVE=1 node tests/web.test.mjs    # adds two real network checks
 ```
 
 Every suite carries a `--self-test` that replaces the thing under test with a
