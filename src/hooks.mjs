@@ -15,7 +15,7 @@
  * must not take the session down. A gate that cannot run has proved nothing —
  * but it also has no standing to block.
  */
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { loadSettings } from './config.mjs'
 
 /**
@@ -34,7 +34,52 @@ export function matches(matcher, subject) {
  * Fire every hook wired to `event` whose matcher accepts `subject`.
  * @returns {{blocked:boolean, reason:string|null, context:string[]}}
  */
-export function runHooks(event, payload, subject = undefined, settings = null) {
+
+/**
+ * Run one hook command without blocking the event loop.
+ *
+ * spawnSync held the thread for the whole hook. Measured on this brain: 476ms
+ * for UserPromptSubmit, during which a 100ms heartbeat fired ZERO times — so
+ * the spinner could not animate and its clock stayed at 0s. From outside that
+ * is indistinguishable from a hang, which is exactly how it was reported.
+ *
+ * Same contract as before: stdout/stderr/status, and a timeout that kills the
+ * process rather than waiting on it.
+ */
+function runOne(command, body, timeoutMs) {
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn('bash', ['-c', command], { env: process.env })
+    } catch {
+      resolve(null)                                  // could not spawn — fail open
+      return
+    }
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const done = (v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v) } }
+
+    // The tree, not just the shell: a hook that spawns a helper would otherwise
+    // outlive its own timeout.
+    const timer = setTimeout(() => {
+      try { process.kill(-child.pid, 'SIGKILL') } catch {
+        try { child.kill('SIGKILL') } catch { /* already gone */ }
+      }
+      done(null)                                     // timed out — fail open
+    }, timeoutMs)
+
+    child.stdout?.on('data', (d) => { stdout += d })
+    child.stderr?.on('data', (d) => { stderr += d })
+    child.on('error', () => done(null))
+    child.on('close', (status) => done({ stdout, stderr, status }))
+
+    try { child.stdin.write(body); child.stdin.end() } catch { /* the hook may not read stdin */ }
+  })
+}
+
+export async function runHooks(event, payload, subject = undefined, settings = null) {
   const cfg = settings ?? loadSettings()
   const groups = cfg?.hooks?.[event]
   const out = { blocked: false, reason: null, context: [], decision: null }
@@ -47,18 +92,13 @@ export function runHooks(event, payload, subject = undefined, settings = null) {
     for (const h of group?.hooks ?? []) {
       if (h?.type !== 'command' || !h?.command) continue
 
-      let r
-      try {
-        r = spawnSync('bash', ['-c', h.command], {
-          input: body,
-          encoding: 'utf8',
-          timeout: (Number(h.timeout) || 60) * 1000,
-          env: process.env,
-        })
-      } catch {
-        continue                                  // could not spawn — fail open
-      }
-      if (r.error) continue                       // timeout / ENOENT — fail open
+      // Awaited, not spawnSync: a synchronous spawn holds the event loop for
+      // the hook's whole runtime. Measured on this brain, UserPromptSubmit
+      // blocked it for 476ms and a 100ms heartbeat fired ZERO times — which
+      // is why the spinner froze with its clock stuck at 0s.
+      const r = await runOne(h.command, body, (Number(h.timeout) || 60) * 1000)
+      // spawn failed, or it timed out and was killed — fail open either way.
+      if (!r) continue
 
       const stdout = (r.stdout || '').trim()
       const stderr = (r.stderr || '').trim()

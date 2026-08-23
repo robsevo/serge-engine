@@ -19,6 +19,7 @@ import { checkPermission } from './permissions.mjs'
 import { shouldCompact, compact, size } from './compact.mjs'
 import { loadSkills, skillIndex, loadAgents } from './brain.mjs'
 import { makeSkillTool } from './tools/skill.mjs'
+import { getTodos } from './tools/todo.mjs'
 import { makeTaskTool } from './tools/task.mjs'
 import { checkSeat } from './seats.mjs'
 import { replay } from './sessions.mjs'
@@ -146,7 +147,7 @@ export function createSession({
     // brief. So SubagentStart's context is the ONLY way the brain can hand it
     // the repo card, the seat notes and the swarm doctrine. Discarding it, as
     // this did until 2026-08-23, launches every specialist blind.
-    const ss = runHooks('SubagentStart',
+    const ss = await runHooks('SubagentStart',
       { ...base(), subagent_id: subId, subagent_type: matcher, prompt: brief }, matcher, settings)
     const briefed = ss.context.length ? `${ss.context.join('\n\n')}\n\n${brief}` : brief
     try {
@@ -158,7 +159,7 @@ export function createSession({
       // subagent-refs-gate can block a subagent that cited files it never read.
       // Blocking after the fact cannot un-run it — what it does is stop the
       // parent from building on an unsound result.
-      const sstop = runHooks('SubagentStop',
+      const sstop = await runHooks('SubagentStop',
         { ...base(), subagent_id: subId, subagent_type: matcher, last_assistant_message: out.text },
         matcher, settings)
       if (sstop.blocked) {
@@ -170,7 +171,7 @@ export function createSession({
       // The subagent already failed, so there is nothing left to block — but a
       // hook may still explain WHY, and that belongs with the error rather than
       // in a discarded return value.
-      const failed = runHooks('SubagentStop',
+      const failed = await runHooks('SubagentStop',
         { ...base(), subagent_id: subId, subagent_type: matcher, error: String(e?.message ?? e) },
         matcher, settings)
       const why = failed.context.length ? `\n\n${failed.context.join('\n')}` : ''
@@ -189,7 +190,7 @@ export function createSession({
     // them every turn would re-inject the same context indefinitely.
     if (!started) {
       const src = resumed ? 'resume' : 'startup'
-      const ss = runHooks('SessionStart', { ...base(), source: src }, src, settings)
+      const ss = await runHooks('SessionStart', { ...base(), source: src }, src, settings)
       // SessionStart's context is what the brain KNOWS: memory-load carries the
       // memories, repo-card the project, progress/reflexion what the last
       // session left. Running these and dropping their output — which is what
@@ -202,7 +203,7 @@ export function createSession({
       started = true
     }
 
-    const ups = runHooks('UserPromptSubmit', { ...base(), prompt }, undefined, settings)
+    const ups = await runHooks('UserPromptSubmit', { ...base(), prompt }, undefined, settings)
     if (ups.blocked) {
       onNotice?.(`blocked: ${ups.reason}`, 'user')
       return { text: '', blocked: true, reason: ups.reason }
@@ -214,6 +215,7 @@ export function createSession({
 
   let final = ''
   let stopHookActive = false
+  let todoNudged = false
   // Scoped to this user turn, not the session: globbing the same pattern again
   // in a later turn is ordinary (the tree may have changed) — doing it three
   // times inside one turn is a loop.
@@ -224,7 +226,7 @@ export function createSession({
     // from a half-finished exchange loses the half that mattered.
     if (shouldCompact(messages, COMPACT_AT_CHARS)) {
       const trigger = 'auto'
-      runHooks('PreCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
+      await runHooks('PreCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
       const r = await compact({ messages, complete, provider })
       if (r.failed) {
         onNotice?.('compaction failed — continuing uncompacted', 'user')
@@ -235,7 +237,7 @@ export function createSession({
       // compact-survival's whole job is to put back what the summary dropped.
       // Running it and discarding its output is worse than not running it: the
       // hook reports success and the context is gone anyway.
-      const pc = runHooks('PostCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
+      const pc = await runHooks('PostCompact', { ...base(), trigger, size_chars: size(messages) }, trigger, settings)
       for (const c of pc.context) messages.push({ role: 'system', content: c })
     }
 
@@ -260,11 +262,11 @@ export function createSession({
 
       let stop
       try {
-        stop = runHooks('Stop', {
+        stop = await runHooks('Stop', {
           ...base(), last_assistant_message: text, stop_hook_active: stopHookActive,
         }, undefined, settings)
       } catch (e) {
-        runHooks('StopFailure', { ...base(), error: String(e?.message ?? e) }, undefined, settings)
+        await runHooks('StopFailure', { ...base(), error: String(e?.message ?? e) }, undefined, settings)
         stop = { blocked: false }
       }
 
@@ -278,13 +280,39 @@ export function createSession({
       // TaskCompleted is the brain's task-evidence-gate — it can block a turn
       // that claims a task is done without evidence. Discarding its verdict is
       // what let "done" mean "the model said so".
-      const tc = runHooks('TaskCompleted', { ...base(), last_assistant_message: text }, undefined, settings)
+      const tc = await runHooks('TaskCompleted', { ...base(), last_assistant_message: text }, undefined, settings)
       if (tc.blocked && !stopHookActive) {
         stopHookActive = true
         onNotice?.(`task-completed gate: ${tc.reason}`, 'model')
         messages.push({ role: 'user', content: tc.reason })
         continue
       }
+
+      // A plan the model wrote and never closed out. It states what it is doing
+      // in the imperative, so leaving boxes open at the end says the work is
+      // unfinished — and the user reads it that way, because that is what it
+      // means. Observed: a research turn wrote three steps, answered fully, and
+      // left all three open.
+      //
+      // Nudged ONCE per turn (todoNudged), and only when the turn actually did
+      // something — a turn that answered a question without touching the list
+      // has nothing to close. Without the one-shot this is an infinite loop the
+      // moment a model declines.
+      const open = getTodos(sessionId).filter((t) => t.status !== 'completed')
+      if (open.length && !todoNudged && turn > 0) {
+        todoNudged = true
+        onNotice?.(`${open.length} todo(s) still open`, 'model')
+        messages.push({
+          role: 'user',
+          content: `Your todo list still has ${open.length} item(s) not marked completed: `
+            + open.map((t) => JSON.stringify(t.content)).join(', ')
+            + '. If that work is done, call TodoWrite with their status set to completed. '
+            + 'If it is genuinely not done, say in one line what is left and why — do not '
+            + 'redo the work you just did.',
+        })
+        continue
+      }
+
       return { text: final, blocked: false }
     }
 
@@ -303,12 +331,12 @@ export function createSession({
       onTool?.(call.name, call.input)
       const payload = { ...base(), tool_name: call.name, tool_input: call.input, tool_use_id: call.id }
 
-      const pre = runHooks('PreToolUse', payload, call.name, settings)
+      const pre = await runHooks('PreToolUse', payload, call.name, settings)
       if (pre.blocked) {
         results.push({ id: call.id, content: `Blocked by PreToolUse hook: ${pre.reason}`, isError: true })
         onToolResult?.(call.name, pre.reason, true)
         onNotice?.(`denied ${call.name}: ${pre.reason}`, 'user')
-        runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: pre.reason },
+        await runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: pre.reason },
           'permission_prompt', settings)
         continue
       }
@@ -337,9 +365,9 @@ export function createSession({
         results.push({ id: call.id, content: `Permission denied: ${detail}`, isError: true })
         onToolResult?.(call.name, verdict.reason, true)
         onNotice?.(`denied ${call.name}: ${detail}`, 'user')
-        runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: verdict.reason },
+        await runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: verdict.reason },
           'permission_prompt', settings)
-        runHooks('PostToolUseFailure',
+        await runHooks('PostToolUseFailure',
           { ...payload, tool_response: `Permission denied: ${verdict.reason}` }, call.name, settings)
         continue
       }
@@ -364,7 +392,7 @@ export function createSession({
       // semgrep-scan and arch-gate all work this way, and discarding this result
       // silently disarms every one of them: observed 2026-08-22, when arch-gate
       // correctly flagged a swallowed error and the engine reported success.
-      const post = runHooks(out.isError ? 'PostToolUseFailure' : 'PostToolUse',
+      const post = await runHooks(out.isError ? 'PostToolUseFailure' : 'PostToolUse',
         { ...payload, tool_response: out.content }, call.name, settings)
 
       let content = out.content

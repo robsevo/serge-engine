@@ -67,6 +67,18 @@ todoWrite.run({ todos: [{ content: 'ping', status: 'pending' }] },
   { sessionId: 's1', onTodos: (t) => { notified = t } })
 ok('the UI is notified', Array.isArray(notified) && notified.length === 1)
 
+// The nudge must be ONE-SHOT. Without a guard, a model that declines to close
+// the list is an infinite loop — the turn can never end.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath as _f } from 'node:url'
+import { dirname as _d, join as _j } from 'node:path'
+const loopSrc = readFileSync(_j(_d(_f(import.meta.url)), '..', 'src', 'loop.mjs'), 'utf8')
+ok('the todo nudge is guarded by a one-shot flag', /!todoNudged/.test(loopSrc))
+ok('the flag is set before continuing', /todoNudged = true/.test(loopSrc))
+ok('it only fires after work was done', /&& turn > 0/.test(loopSrc),
+   'without this a turn that never touched the list gets nudged')
+ok('it tells the model not to redo the work', /redo the work you just did/.test(loopSrc))
+
 /* ── AskUserQuestion ──────────────────────────────────────────────────── */
 console.log('\n── AskUserQuestion ──')
 
