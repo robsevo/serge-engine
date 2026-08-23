@@ -35,3 +35,24 @@ what is actually on screen.
 Runs in `npm test`. Pins the mechanism: the repaint must re-arm on **every**
 resize event. `setState(true)` on an already-true boolean is a React no-op, so
 the effect that clears the spacer never re-ran and it stuck permanently.
+
+## `typing-check.py` — the prompt line as it is drawn
+
+Types into a real session on a narrow pty, one character at a time, and compares
+the **rendered screen** against what was typed. Nothing is submitted, so there is
+no model call and no network.
+
+```bash
+python3 tests/tui/typing-check.py               # 44 cols
+python3 tests/tui/typing-check.py 34,44,60,80
+TYPE_TEXT='/sc:research "…"' python3 tests/tui/typing-check.py 40
+SERGE_BIN=/path/to/sergio python3 tests/tui/typing-check.py
+```
+
+Like `resize-check.py` it needs a working install, so it is not in `npm test`.
+
+**Catches:** characters consumed at a wrap point, and the space after `❯` being
+trimmed — both of which shipped. On the four-sibling `<Text>` layout at 44
+columns it renders `…force a wra` / `  here`, losing the `p` of `wrap`. The unit
+level of the same bug is pinned in `tests/prompt-wrap.test.mjs`, which does run
+in `npm test`.
