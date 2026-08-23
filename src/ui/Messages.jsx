@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text } from 'ink'
+import { Box, Text, useStdout } from 'ink'
 import { renderMarkdown } from './markdown.jsx'
 
 /**
@@ -46,11 +46,34 @@ function ToolResult({ text, extra, isError }) {
   )
 }
 
+/**
+ * Longest line of prose, in columns.
+ *
+ * Two reasons, and the typographic one came first: a paragraph set across 150
+ * columns is genuinely hard to read — the eye loses the line on the return
+ * sweep, which is why books settle near 65-90 characters.
+ *
+ * It also limits an ugliness that cannot be fixed properly. Finished turns are
+ * committed to scrollback and never redrawn, so text wrapped at 150 columns is
+ * re-broken BY THE TERMINAL when the window narrows — and terminals break
+ * mid-word, where Ink breaks between words. Capping the measure means narrowing
+ * to anything above this leaves the transcript untouched. Narrowing below it
+ * still re-breaks; nothing short of re-rendering scrollback can prevent that,
+ * and scrollback is not ours to re-render.
+ */
+const MAX_MEASURE = 96
+
 function AssistantText({ text }) {
+  const { stdout } = useStdout()
+  // flexGrow and width fight, and flexGrow wins — the cap did nothing until
+  // this became a computed width. `- 3` leaves the marker column and a right
+  // margin, and `||` (not `??`) because a pty with no window size reports 0.
+  const cols = stdout?.columns || process.stdout.columns || 80
+  const width = Math.max(24, Math.min(MAX_MEASURE, cols - 3))
   return (
     <Box flexDirection="row" marginTop={1}>
       <Box minWidth={2}><Text>{BLACK_CIRCLE}</Text></Box>
-      <Box flexGrow={1} flexDirection="column">{renderMarkdown(text)}</Box>
+      <Box flexDirection="column" width={width}>{renderMarkdown(text)}</Box>
     </Box>
   )
 }
