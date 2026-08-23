@@ -25,7 +25,12 @@ export OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://localhost:4000/v1}"
 export OPENAI_API_KEY="${OPENAI_API_KEY:-sk-noop}"
 export OPENAI_MODEL="${OPENAI_MODEL:-local-coder}"
 
+# keys.env is the single file a new user fills in; router.env and serge.env
+# remain for existing installs. Sourced LAST so a filled keys.env wins over the
+# blank router.env a fresh install ships.
 [ -f "$SERGE_HOME/router.env" ] && { set -a; . "$SERGE_HOME/router.env"; set +a; }
+[ -f "$SERGE_HOME/serge.env" ]  && { set -a; . "$SERGE_HOME/serge.env";  set +a; }
+[ -f "$SERGE_HOME/keys.env" ]   && { set -a; . "$SERGE_HOME/keys.env";   set +a; }
 
 if [ ! -f "$DIST" ]; then
   echo "serge-engine: dist/cli.mjs not found. Build first:  npm run build" >&2
