@@ -9,7 +9,7 @@ import { render } from 'ink'
 import React from 'react'
 import { stdout } from 'node:process'
 import { createSession } from './loop.mjs'
-import { loadSettings, providerConfig, configDir, VERSION } from './config.mjs'
+import { loadSettings, providerConfig, configDir, cliName, VERSION } from './config.mjs'
 import { loadSeats, checkSeat, renderStartup } from './seats-startup.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
 import { listSessions } from './sessions.mjs'
@@ -104,7 +104,12 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
   if (session.turns === 0) {
     stdout.write('\x1b[2m  no turns — nothing to resume\x1b[0m\n')
   } else {
-    const resumeCmd = `serge --resume ${session.sessionId}`
+    // Named for the binary the user actually typed, not for this engine. Under
+    // a second install — `sergio` drives the same engine against ~/.sergio —
+    // printing "serge --resume <id>" sends them to the OTHER install, which
+    // looks in a different transcript store and answers "No conversation
+    // found" for a session that is sitting right there.
+    const resumeCmd = `${cliName()} --resume ${session.sessionId}`
     stdout.write(
       `\x1b[2m  session ${session.sessionId} · ${session.turns} turn(s)\n`
       + `  ${session.transcriptPath}\x1b[0m\n`

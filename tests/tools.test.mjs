@@ -18,7 +18,7 @@ import { runTool } from '../src/tools/index.mjs'
 import { loadSeats, checkSeat } from '../src/seats.mjs'
 import { parseFrontmatter, loadCommands, loadSkills, expandCommand, skillIndex } from '../src/brain.mjs'
 import { replay, listSessions } from '../src/sessions.mjs'
-import { slugFor, legacySlugFor } from '../src/config.mjs'
+import { slugFor, legacySlugFor, cliName } from '../src/config.mjs'
 import { loadMcpConfig, startMcp } from '../src/mcp.mjs'
 import { loadAgents } from '../src/brain.mjs'
 import { makeTaskTool } from '../src/tools/task.mjs'
@@ -238,6 +238,32 @@ try {
   check('sessions: the pre-fix slug is still spelled the old way',
         legacySlugFor('/a/b') === 'a-b',
         'legacy sessions are found by it, so it must not drift')
+
+  // ── the name the engine tells you to type next ────────────────────────────
+  // Every "run this next" line is only useful if it names the binary the user
+  // actually invoked: a second install driving the same engine against another
+  // config dir would otherwise be told to run the FIRST one, which then reports
+  // no such session for a session it simply cannot see.
+  const realCli = process.env.SERGE_CLI_NAME
+  try {
+    delete process.env.SERGE_CLI_NAME
+    check('cliName: falls back to serge when the launcher said nothing',
+          cliName() === 'serge')
+    process.env.SERGE_CLI_NAME = 'sergio'
+    check('cliName: uses the name the launcher exported', cliName() === 'sergio')
+    process.env.SERGE_CLI_NAME = '/usr/local/bin/sergio'
+    check('cliName: refuses a path rather than printing one', cliName() === 'serge',
+          'a full path in a "run this" hint reads as a bug, not an instruction')
+    process.env.SERGE_CLI_NAME = '  '
+    check('cliName: refuses a blank name', cliName() === 'serge')
+    process.env.SERGE_CLI_NAME = 'rm -rf /; serge'
+    check('cliName: refuses anything that is not a bare command name',
+          cliName() === 'serge',
+          'the value is interpolated into text the user is invited to run')
+  } finally {
+    if (realCli === undefined) delete process.env.SERGE_CLI_NAME
+    else process.env.SERGE_CLI_NAME = realCli
+  }
 
   // ── MCP ───────────────────────────────────────────────────────────────────
   writeFileSync(p('.mcp.json'), JSON.stringify({ mcpServers: { x: { command: 'true' } } }))

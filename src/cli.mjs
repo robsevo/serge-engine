@@ -6,7 +6,7 @@
  * yet and says so rather than pretending — see README milestones.
  */
 import { runSession } from './loop.mjs'
-import { providerConfig, loadSettings, configDir, VERSION } from './config.mjs'
+import { providerConfig, loadSettings, configDir, cliName, VERSION } from './config.mjs'
 import { MODES } from './permissions.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { listSessions, findSession, renderSessions } from './sessions.mjs'
@@ -67,7 +67,7 @@ export async function main(argv = process.argv.slice(2)) {
     const hit = findSession(process.cwd(), ref && !ref.startsWith('-') ? ref : null)
     if (!hit) {
       process.stderr.write(ref
-        ? `serge-engine: no session matching "${ref}" in this directory.\n  serge --sessions to list them.\n`
+        ? `serge-engine: no session matching "${ref}" in this directory.\n  ${cliName()} --sessions to list them.\n`
         : 'serge-engine: no previous session in this directory.\n')
       return 64
     }
@@ -172,12 +172,18 @@ function readStdin() {
   })
 }
 
+// Padded rather than hand-spaced: the name is whatever the launcher was
+// invoked as, so a wrapper called something longer than `serge` would walk the
+// description column off by its own length difference on every line.
+const use = (args, desc = '') =>
+  `  ${(cliName() + (args ? ` ${args}` : '')).padEnd(25)}${desc}`.trimEnd()
+
 const HELP = `serge-engine ${VERSION} — an MIT agent engine for serge-public
 
-  serge                    open an interactive session
-  serge -p "prompt"        run one headless turn
-  serge --doctor           show config/router status
-  serge --version
+${use('', 'open an interactive session')}
+${use('-p "prompt"', 'run one headless turn')}
+${use('--doctor', 'show config/router status')}
+${use('--version')}
 
   --model <seat>           override OPENAI_MODEL for this run
   --continue, -c           resume the most recent session in this directory

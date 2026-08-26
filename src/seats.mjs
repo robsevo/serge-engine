@@ -26,7 +26,7 @@
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { configDir } from './config.mjs'
+import { configDir, cliName } from './config.mjs'
 
 /**
  * Minimal scan for the two keys that matter. Not a YAML parser: the file is 50KB
@@ -96,7 +96,7 @@ export function checkSeat(name, seats = loadSeats()) {
     ok: false,
     reason: `unknown seat "${name}"`
       + (near.length ? `. Did you mean: ${near.join(', ')}?` : '')
-      + `\n  ${seats.size} seats are configured; run \`serge --seats\` to list them.`,
+      + `\n  ${seats.size} seats are configured; run \`${cliName()} --seats\` to list them.`,
   }
 }
 

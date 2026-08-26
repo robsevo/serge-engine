@@ -19,6 +19,13 @@ SERGE_HOME="${SERGE_HOME:-$HOME/.serge}"
 # Keep config fully separate from a real Claude Code install (~/.claude).
 export CLAUDE_CONFIG_DIR="$SERGE_HOME"
 
+# The name the user actually typed. argv[1] inside node is always dist/cli.mjs,
+# so every "run this next" line the engine prints would otherwise say `serge`
+# even when a wrapper drove it under another name against another config dir —
+# and following that hint lands in the wrong install's transcripts. Already-set
+# wins, so a wrapper can claim the name before exec'ing this script.
+export SERGE_CLI_NAME="${SERGE_CLI_NAME:-$(basename "$0")}"
+
 # Router. The engine speaks OpenAI-compatible HTTP and nothing else.
 export CLAUDE_CODE_USE_OPENAI=1
 export OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://localhost:4000/v1}"

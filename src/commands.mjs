@@ -13,6 +13,7 @@
 import { MODES } from './permissions.mjs'
 import { checkSeat, renderSeats } from './seats.mjs'
 import { expandCommand } from './brain.mjs'
+import { cliName } from './config.mjs'
 
 /**
  * Built-in commands, in the order `/` offers them: what you reach for most
@@ -179,7 +180,7 @@ export function dispatch(line, ctx = {}) {
         lines: [
           ...sessions.slice(0, 10).map((s) =>
             `  ${String(s.id).slice(0, 8)}  ${String(s.turns ?? 0).padStart(3)} turn(s)  ${(s.preview || '').slice(0, 56)}`),
-          '  start with: serge --resume <id>',
+          `  start with: ${cliName()} --resume <id>`,
         ],
       }
     }

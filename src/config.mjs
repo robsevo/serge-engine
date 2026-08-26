@@ -29,6 +29,25 @@ export function configDir() {
   return process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.serge')
 }
 
+/**
+ * The name this engine was actually invoked as.
+ *
+ * The launcher exports it because nothing inside the process can work it out:
+ * argv[1] is dist/cli.mjs no matter what the user typed. It matters for every
+ * line that tells someone what to run next. A second install can wrap this
+ * same engine under another name against its own CLAUDE_CONFIG_DIR — `sergio`
+ * does exactly that — and printing "serge --resume <id>" to that user names a
+ * DIFFERENT install, which then reports "No conversation found" for a session
+ * that exists and is resumable under the name they started with.
+ *
+ * Anything that is not a plain command name (a path, an empty value) prints
+ * worse than the default, so it falls back rather than echoing it.
+ */
+export function cliName() {
+  const n = String(process.env.SERGE_CLI_NAME || '').trim()
+  return /^[A-Za-z0-9._-]+$/.test(n) ? n : 'serge'
+}
+
 export function loadSettings() {
   const p = join(configDir(), 'settings.json')
   if (!existsSync(p)) return {}
