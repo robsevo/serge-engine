@@ -126,6 +126,19 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   // aliases it and the spin visibly stutters. The eyes run at 120ms off the
   // same elapsed clock rather than a second timer, which is what keeps the two
   // cadences independent without two intervals fighting for renders.
+  //
+  // The dependency list is [busy] and must stay [busy]. It used to also carry
+  // `stream` and `thinking`, which this very interval sets — so every flushed
+  // chunk changed a dep, tore the interval down and built a new one. While a
+  // reasoning seat streamed, that happened continuously: the 80ms clock never
+  // completed a period, frames landed at whatever irregular cadence the chunks
+  // arrived at, and the whole dynamic region — spinner, bar, and the input line
+  // under them — repainted out of step with itself. That is the flicker.
+  //
+  // Reading the buffers through refs is what makes [busy] correct: a ref is not
+  // a dependency. The two setters are then safe to call unconditionally,
+  // because React bails out of a re-render when the next value is Object.is-equal
+  // to the current one — so an idle tick still costs no paint.
   useEffect(() => {
     if (!busy) return
     const t = setInterval(() => {
@@ -135,11 +148,11 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       })
       setElapsed((Date.now() - startRef.current) / 1000)
       // Flush whatever arrived since the last tick, in one render.
-      if (streamBuf.current !== stream) setStream(streamBuf.current)
-      if (thinkChars.current !== thinking) setThinking(thinkChars.current)
+      setStream(streamBuf.current)
+      setThinking(thinkChars.current)
     }, 80)
     return () => clearInterval(t)
-  }, [busy, stream, thinking])
+  }, [busy])
 
   const submit = useCallback(async (text) => {
     history.current.push(text)
@@ -166,6 +179,14 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       if (cmd.prompt) { text = cmd.prompt }   // a brain command: send its body
     }
 
+    // Armed BEFORE the busy state is shown rather than after the yield below.
+    // Escape has to be live for exactly as long as the spinner is, and a
+    // controller that does not exist yet cannot be aborted. Created after the
+    // yield, there was a window covering the brain's ~488ms of
+    // UserPromptSubmit hooks in which an interrupt found no controller and
+    // fell through to the quit path — pressing escape early closed the
+    // session instead of stopping the turn.
+    abortRef.current = new AbortController()
     setBusy(true)
     streamBuf.current = ''
     setStream('')
@@ -189,7 +210,6 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
     setElapsed(0)
     setTokens('')
     const before = session.usage
-    abortRef.current = new AbortController()
     try {
       const res = await session.send(text, { signal: abortRef.current.signal })
       if (res.blocked) push({ kind: 'notice', text: `blocked: ${res.reason}`, tone: 'warn' })
@@ -267,6 +287,11 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
     exit()
   }, [exit, onExit])
 
+  // Escape's contract is deliberately narrower than ctrl-c's: stop the turn,
+  // never quit. Ctrl-c on an idle prompt is a request to leave; escape on an
+  // idle prompt is not, so it must not inherit interrupt()'s exit half.
+  const stop = useCallback(() => { abortRef.current?.abort() }, [])
+
   return (
     <Box flexDirection="column">
       {/* The over-tall frame: one render past the viewport, which is what makes
@@ -313,6 +338,7 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
         onSubmit={submit}
         onCycleMode={cycleMode}
         onInterrupt={interrupt}
+        onStop={stop}
         busy={busy}
         history={history.current}
         commands={commands}

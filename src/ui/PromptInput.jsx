@@ -16,7 +16,7 @@ const MAX_ROWS = 8
  * Once you type a space you are writing the command's ARGUMENT, and the menu
  * has nothing left to offer, so it closes and gives ↑↓ back to history.
  */
-export function PromptInput({ onSubmit, onCycleMode, onInterrupt, busy, history, commands }) {
+export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, history, commands }) {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
   const [histIdx, setHistIdx] = useState(-1)
@@ -37,10 +37,23 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, busy, history,
   useInput((input, key) => {
     if (key.ctrl && input === 'c') { onInterrupt(); return }
     if (key.shift && key.tab) { onCycleMode(); return }
-    if (busy) return                       // keystrokes during a turn are ignored
 
-    // Escape closes the menu by clearing the line's command-ness, not by a flag.
-    if (key.escape) { if (open) set(''); return }
+    // Escape stops the turn, and is handled BEFORE the busy guard below.
+    // That guard is right to drop ordinary typing mid-turn — a half-written
+    // next prompt should not accumulate behind a running one — but it was also
+    // swallowing the single key whose entire job is to reach a running turn.
+    // So the only way to stop Serge was ctrl-c, which people reach for to quit,
+    // not to interrupt. Escape now always interrupts while busy.
+    //
+    // When idle it keeps its other job: closing the command menu by clearing
+    // the line's command-ness, not by a flag.
+    if (key.escape) {
+      if (busy) { onStop(); return }
+      if (open) set('')
+      return
+    }
+
+    if (busy) return                       // other keystrokes during a turn are ignored
 
     if (open && key.tab) { set('/' + pick.name + ' '); return }
     if (open && (key.upArrow || key.downArrow)) {
