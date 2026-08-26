@@ -17,7 +17,8 @@ import { join } from 'node:path'
 import { runTool } from '../src/tools/index.mjs'
 import { loadSeats, checkSeat } from '../src/seats.mjs'
 import { parseFrontmatter, loadCommands, loadSkills, expandCommand, skillIndex } from '../src/brain.mjs'
-import { replay, listSessions, slugFor } from '../src/sessions.mjs'
+import { replay, listSessions } from '../src/sessions.mjs'
+import { slugFor, legacySlugFor } from '../src/config.mjs'
 import { loadMcpConfig, startMcp } from '../src/mcp.mjs'
 import { loadAgents } from '../src/brain.mjs'
 import { makeTaskTool } from '../src/tools/task.mjs'
@@ -217,7 +218,26 @@ try {
         rp.messages[2]?.role === 'tool' && rp.messages[2]?.tool_call_id === 'c1',
         'an unpaired tool_call makes the whole request invalid')
   check('replay: a missing file is empty, not a throw', replay(p('nope.jsonl')).turns === 0)
-  check('sessions: slug matches the transcript layout', slugFor('/a/b') === 'a-b')
+  // The slug IS the resume path: serge stats exactly one directory, so any
+  // disagreement with its sanitizePath is an unresumable session, not a
+  // cosmetic difference. The leading '-' is the character that was missing.
+  check('sessions: slug keeps the leading separator', slugFor('/a/b') === '-a-b')
+  check('sessions: slug maps every non-alphanumeric byte',
+        slugFor('/a/b_c.d e') === '-a-b-c-d-e',
+        `dots, underscores and spaces are separators too: ${slugFor('/a/b_c.d e')}`)
+  check('sessions: slug does not collapse runs', slugFor('/a//b') === '-a--b')
+  check('sessions: long paths get a hash so two deep siblings cannot collide',
+        (() => {
+          const base = '/' + 'x'.repeat(250)
+          const a = slugFor(base + '/one')
+          const b = slugFor(base + '/two')
+          // Same 200-char prefix, different suffix: truncation alone would have
+          // mapped both onto one directory and merged two projects' history.
+          return a.slice(0, 200) === b.slice(0, 200) && a !== b
+        })())
+  check('sessions: the pre-fix slug is still spelled the old way',
+        legacySlugFor('/a/b') === 'a-b',
+        'legacy sessions are found by it, so it must not drift')
 
   // ── MCP ───────────────────────────────────────────────────────────────────
   writeFileSync(p('.mcp.json'), JSON.stringify({ mcpServers: { x: { command: 'true' } } }))

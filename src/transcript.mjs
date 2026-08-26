@@ -14,14 +14,15 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { projectsDir } from './config.mjs'
+import { projectDirFor } from './config.mjs'
 
 export class Transcript {
   constructor(sessionId, cwd, parent = null) {
     this.sessionId = sessionId
     // Mirrors serge's layout: one directory per project, slugified from cwd.
-    const slug = cwd.replace(/[/\\]/g, '-').replace(/^-/, '') || 'root'
-    this.path = join(projectsDir(), slug, `${sessionId}.jsonl`)
+    // The slug rule lives in config.mjs because sessions.mjs has to spell it
+    // the same way to find this file again — and once did not.
+    this.path = join(projectDirFor(cwd), `${sessionId}.jsonl`)
     mkdirSync(dirname(this.path), { recursive: true })
     // Lineage marker, written before anything else. A fork does NOT copy its
     // parent's entries — it points at them. Copying would double every byte of

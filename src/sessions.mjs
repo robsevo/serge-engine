@@ -18,7 +18,7 @@
  */
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
-import { projectsDir } from './config.mjs'
+import { projectDirFor, legacyProjectDirFor } from './config.mjs'
 
 /** The `parent_session_id` a fork records in its first line, if any. */
 function parentOf(lines) {
@@ -32,9 +32,14 @@ function parentOf(lines) {
   return null
 }
 
-/** Slug a cwd the same way Transcript does, so listing finds the same directory. */
-export function slugFor(cwd) {
-  return cwd.replace(/[/\\]/g, '-').replace(/^-/, '') || 'root'
+/**
+ * Every directory that may hold this cwd's transcripts, newest layout first.
+ * The second entry only exists on an install that wrote sessions under the old
+ * slug (see config.mjs). Listing both is what keeps a pre-fix history
+ * resumable instead of appearing to have been erased by an upgrade.
+ */
+function projectDirs(cwd) {
+  return [projectDirFor(cwd), legacyProjectDirFor(cwd)].filter((d) => d && existsSync(d))
 }
 
 /**
@@ -42,21 +47,20 @@ export function slugFor(cwd) {
  * @returns {Array<{id, path, mtime, turns, preview}>}
  */
 export function listSessions(cwd, limit = 20) {
-  const dir = join(projectsDir(), slugFor(cwd))
-  if (!existsSync(dir)) return []
-  let names
-  try { names = readdirSync(dir).filter((n) => n.endsWith('.jsonl')) } catch { return [] }
-
   const out = []
-  for (const n of names) {
-    const path = join(dir, n)
-    let st
-    try { st = statSync(path) } catch { continue }
-    const { turns, preview } = summarize(path)
-    let parent = null
-    try { parent = parentOf(readFileSync(path, 'utf8').split('\n')) } catch { /* unreadable */ }
-    if (!turns && !parent) continue            // an empty session is noise
-    out.push({ id: n.replace(/\.jsonl$/, ''), path, mtime: st.mtimeMs, turns, preview, parent })
+  for (const dir of projectDirs(cwd)) {
+    let names
+    try { names = readdirSync(dir).filter((n) => n.endsWith('.jsonl')) } catch { continue }
+    for (const n of names) {
+      const path = join(dir, n)
+      let st
+      try { st = statSync(path) } catch { continue }
+      const { turns, preview } = summarize(path)
+      let parent = null
+      try { parent = parentOf(readFileSync(path, 'utf8').split('\n')) } catch { /* unreadable */ }
+      if (!turns && !parent) continue          // an empty session is noise
+      out.push({ id: n.replace(/\.jsonl$/, ''), path, mtime: st.mtimeMs, turns, preview, parent })
+    }
   }
   return out.sort((a, b) => b.mtime - a.mtime).slice(0, limit)
 }
@@ -94,6 +98,34 @@ export function findSession(cwd, ref = null) {
 }
 
 /**
+ * Where a fork's parent transcript actually lives.
+ *
+ * Normally beside the fork. But a session forked out of a pre-fix directory
+ * writes the new transcript under the corrected slug while still naming a
+ * parent that stayed behind, so the two ends of one conversation sit in
+ * sibling directories. Looking only beside the fork finds nothing, and a
+ * missing parent replays as empty — the fork would quietly lose everything it
+ * was forked from, which is worse than the resume bug this all started with.
+ *
+ * Ids are UUIDs, so widening the search to the other project directories risks
+ * nothing and is only ever reached on a miss.
+ */
+function resolveParent(path, parentId) {
+  const here = dirname(path)
+  const name = `${parentId}.jsonl`
+  const beside = join(here, name)
+  if (existsSync(beside)) return beside
+  const root = dirname(here)
+  let siblings
+  try { siblings = readdirSync(root) } catch { return beside }
+  for (const s of siblings) {
+    const candidate = join(root, s, name)
+    if (candidate !== beside && existsSync(candidate)) return candidate
+  }
+  return beside                                // report the expected path
+}
+
+/**
  * Replay a transcript into provider messages.
  * @returns {{messages: Array, turns: number, dropped: number}}
  */
@@ -117,8 +149,7 @@ export function replay(path, { maxChars = 300_000, _seen = new Set() } = {}) {
   const parentId = parentOf(lines)
   if (parentId && !_seen.has(parentId)) {
     _seen.add(parentId)
-    const parentPath = join(dirname(path), `${parentId}.jsonl`)
-    const up = replay(parentPath, { maxChars, _seen })
+    const up = replay(resolveParent(path, parentId), { maxChars, _seen })
     messages.push(...up.messages)
     turns += up.turns
   }
