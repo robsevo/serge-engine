@@ -6,6 +6,34 @@ const BLUE = '#6EB4E6'
 const MAX_ROWS = 8
 
 /**
+ * The line itself: prompt marker, text, block cursor.
+ *
+ * ONE Text node, with the marker and the cursor NESTED inside it. This was four
+ * SIBLING Text nodes in a row <Box>, and Ink wraps each sibling independently:
+ * once the line was wide enough to wrap, the character sitting on the break was
+ * consumed and the space after `❯` was trimmed away. At 40 columns
+ * `…nintendo switch with…` drew as `…nintendo switc` / `with…` — the h gone from
+ * the screen while still present in state, so retyping never brought it back and
+ * only a resize (which makes Ink clear and replay) restored it.
+ *
+ * Pure on purpose: the keyboard lives in PromptInput, so this can be rendered at
+ * any width with any cursor position — see tests/prompt-wrap.test.mjs.
+ */
+export function PromptLine({ value, cursor }) {
+  const c = Math.min(cursor, value.length)
+  return (
+    <Box>
+      <Text wrap="wrap">
+        <Text color={BLUE}>{'❯ '}</Text>
+        {value.slice(0, c)}
+        <Text inverse>{value[c] ?? ' '}</Text>
+        {value.slice(c + 1)}
+      </Text>
+    </Box>
+  )
+}
+
+/**
  * The input line, and the command menu that opens under it.
  *
  * A small line editor rather than a full one: printable characters, backspace,
@@ -119,12 +147,7 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, 
 
   return (
     <Box flexDirection="column">
-      <Box>
-        <Text color={BLUE}>{'❯ '}</Text>
-        <Text>{value.slice(0, c)}</Text>
-        <Text inverse>{value[c] ?? ' '}</Text>
-        <Text>{value.slice(c + 1)}</Text>
-      </Box>
+      <PromptLine value={value} cursor={c} />
       {open ? (
         <Box flexDirection="column" marginTop={0}>
           {shown.map((m, i) => {
