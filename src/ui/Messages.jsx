@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text, useStdout } from 'ink'
 import { renderMarkdown } from './markdown.jsx'
+import { summarize } from '../diff.mjs'
 
 /**
  * The transcript — ported from serge's message components.
@@ -63,7 +64,42 @@ function ToolResult({ text, extra, isError }) {
  */
 const MAX_MEASURE = 96
 
-function AssistantText({ text }) {
+/**
+ * A file change, under the tool result that made it.
+ *
+ * Green added / red removed, with the surrounding lines dimmed so the change
+ * reads in place. Truncated on purpose: a Write of a large file is a legitimate
+ * call and its diff is not a thing anyone reads, so the head of it plus a count
+ * is the honest summary. `wrap="truncate-end"` because a diff that soft-wraps
+ * stops being column-aligned and stops being readable as a diff.
+ */
+function Diff({ diff }) {
+  const s = summarize(diff, { maxLines: 24 })
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text dimColor>{'     '}</Text>
+        <Text color="green">{`+${s.added}`}</Text>
+        <Text dimColor>{' '}</Text>
+        <Text color="red">{`-${s.removed}`}</Text>
+        <Text dimColor wrap="truncate-start">{`  ${diff.file ?? ''}`}</Text>
+      </Box>
+      {s.lines.map((l, i) => {
+        if (l.type === 'gap') return <Text key={i} dimColor>{`     ${l.text}`}</Text>
+        const sign = l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' '
+        const color = l.type === 'add' ? 'green' : l.type === 'del' ? 'red' : undefined
+        return (
+          <Text key={i} color={color} dimColor={!color} wrap="truncate-end">
+            {`     ${sign} ${l.text}`}
+          </Text>
+        )
+      })}
+      {s.hidden ? <Text dimColor>{`     … ${s.hidden} more diff line(s)`}</Text> : null}
+    </Box>
+  )
+}
+
+function AssistantText({ text, truncated = 0 }) {
   const { stdout } = useStdout()
   // flexGrow and width fight, and flexGrow wins — the cap did nothing until
   // this became a computed width. `- 3` leaves the marker column and a right
@@ -73,7 +109,13 @@ function AssistantText({ text }) {
   return (
     <Box flexDirection="row" marginTop={1}>
       <Box minWidth={2}><Text>{BLACK_CIRCLE}</Text></Box>
-      <Box flexDirection="column" width={width}>{renderMarkdown(text)}</Box>
+      <Box flexDirection="column" width={width}>
+        {/* Only the live copy is ever truncated, and it says so — a fragment
+            presented as the whole reply is worse than no live view at all. The
+            complete text is committed to scrollback when the turn ends. */}
+        {truncated ? <Text dimColor>{`… ${truncated} earlier line(s) — full reply follows`}</Text> : null}
+        {renderMarkdown(text)}
+      </Box>
     </Box>
   )
 }
@@ -101,7 +143,8 @@ export function Messages({ items }) {
         if (m.kind === 'user') return <UserMessage key={key} text={m.text} />
         if (m.kind === 'tool') return <ToolUse key={key} {...m} />
         if (m.kind === 'result') return <ToolResult key={key} {...m} />
-        if (m.kind === 'text') return <AssistantText key={key} text={m.text} />
+        if (m.kind === 'text') return <AssistantText key={key} text={m.text} truncated={m.truncated} />
+        if (m.kind === 'diff') return <Diff key={key} diff={m.diff} />
         if (m.kind === 'done') return <Done key={key} seconds={m.seconds} />
         return <Notice key={key} text={m.text} tone={m.tone} />
       })}

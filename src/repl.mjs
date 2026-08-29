@@ -32,6 +32,7 @@ import { clawd, MOTION } from './clawd.mjs'
 import { homedir } from 'node:os'
 import { MODES as ALL_MODES } from './permissions.mjs'
 import { createPane, fit, visible } from './pane.mjs'
+import { renderDiffText } from './diff.mjs'
 
 const C = stdout.isTTY
   ? { dim: '\x1b[2m', b: '\x1b[1m', g: '\x1b[32m', y: '\x1b[33m', r: '\x1b[31m',
@@ -89,7 +90,6 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   const shortCwd = cwd.startsWith(homedir()) ? `~${cwd.slice(homedir().length)}` : cwd
   const COMPACT_AT = Number(process.env.SERGE_COMPACT_AT || 400_000)
   let streaming = false
-  let paneTimer = null
   let inlineWidth = 0
   let atLineStart = true
   let firstLine = true
@@ -242,7 +242,7 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     // One line under each call. A call with nothing under it reads as though it
     // never returned; the full output is in the transcript, so this only has to
     // say what happened.
-    onToolResult: (name, content, isError) => {
+    onToolResult: (name, content, isError, diff = null) => {
       // An error still surfaces: a skill that failed to load changes the answer.
       if (QUIET_TOOLS.has(name) && !isError) return
       const text = String(content ?? '').trim()
@@ -251,6 +251,9 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       const more = lines.length > 1 ? ` ${C.dim}+${lines.length - 1} line${lines.length === 2 ? '' : 's'}${C.x}` : ''
       const mark = isError ? `${C.r}└${C.x}` : `${C.dim}└${C.x}`
       say(`  ${mark}  ${C.dim}${head}${C.x}${more}\n`)
+      // The change under the summary, same as the Ink front-end. Both read the
+      // same `diff` off the tool result, so the two cannot drift.
+      if (diff?.lines?.length) say(renderDiffText(diff, { color: Boolean(stdout.isTTY) }) + '\n')
     },
     onAsk: askPermission,
   })

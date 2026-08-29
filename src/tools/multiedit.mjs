@@ -1,4 +1,5 @@
 import { resolvePath } from '../paths.mjs'
+import { diffLines } from '../diff.mjs'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 
@@ -45,7 +46,8 @@ export const multiEdit = {
     const edits = Array.isArray(input.edits) ? input.edits : null
     if (!edits || !edits.length) return { content: 'MultiEdit: edits must be a non-empty array', isError: true }
 
-    let buf = readFileSync(p, 'utf8')
+    const src = readFileSync(p, 'utf8')
+    let buf = src
     const applied = []
 
     for (let i = 0; i < edits.length; i++) {
@@ -82,6 +84,7 @@ export const multiEdit = {
     return {
       content: `MultiEdit: applied ${edits.length} edit(s) to ${p} (${applied.reduce((a, b) => a + b, 0)} replacement(s))`,
       isError: false,
+      diff: { file: p, ...diffLines(src, buf) },
     }
   },
 }

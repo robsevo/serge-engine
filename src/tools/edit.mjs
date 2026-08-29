@@ -1,4 +1,5 @@
 import { resolvePath } from '../paths.mjs'
+import { diffLines } from '../diff.mjs'
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 
@@ -34,7 +35,16 @@ export const edit = {
       return { content: `Edit: old_string appears ${count} times in ${p}; pass replace_all or make it unique`, isError: true }
     }
 
-    writeFileSync(p, input.replace_all ? src.split(oldS).join(newS) : src.replace(oldS, newS))
-    return { content: `Edited ${p} (${input.replace_all ? count : 1} replacement(s))`, isError: false }
+    const next = input.replace_all ? src.split(oldS).join(newS) : src.replace(oldS, newS)
+    writeFileSync(p, next)
+    // The diff rides beside the message rather than inside it: the sentence is
+    // what the MODEL reads back, and pasting the change into the tool result
+    // would spend context re-describing an edit it just wrote. The front-ends
+    // take `diff` and show it; nothing else sees it.
+    return {
+      content: `Edited ${p} (${input.replace_all ? count : 1} replacement(s))`,
+      isError: false,
+      diff: { file: p, ...diffLines(src, next) },
+    }
   },
 }
