@@ -50,7 +50,13 @@ function runOne(command, body, timeoutMs) {
   return new Promise((resolve) => {
     let child
     try {
-      child = spawn('bash', ['-c', command], { env: process.env })
+      // `detached` is what makes the timeout's `process.kill(-pid)` below mean
+      // anything: without it the hook shares OUR process group, `-pid` names no
+      // group, the kill throws ESRCH and only the bash wrapper is signalled —
+      // so a hook that spawned a helper left the helper running past its own
+      // timeout. Detached also keeps a terminal Ctrl+C off the hook, which is
+      // right: interrupting a turn should not half-run a gate.
+      child = spawn('bash', ['-c', command], { env: process.env, detached: true })
     } catch {
       resolve(null)                                  // could not spawn — fail open
       return

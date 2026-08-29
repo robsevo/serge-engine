@@ -21,10 +21,12 @@ import { loadSkills, skillIndex, loadAgents } from './brain.mjs'
 import { makeSkillTool } from './tools/skill.mjs'
 import { getTodos } from './tools/todo.mjs'
 import { makeTaskTool } from './tools/task.mjs'
-import { checkSeat } from './seats.mjs'
+import { checkSeat, loadSeats } from './seats.mjs'
 import { replay } from './sessions.mjs'
 
 const MAX_TURNS = 40
+/** A turn shorter than this finished while you were still looking at it. */
+const NOTIFY_AFTER_MS = Number(process.env.SERGE_NOTIFY_AFTER ?? 45) * 1000
 const COMPACT_AT_CHARS = Number(process.env.SERGE_COMPACT_AT || 400_000)
 
 /**
@@ -102,9 +104,16 @@ export function createSession({
 
   // A definition naming a seat the router does not have would fail inside a
   // subagent nobody is watching, so it is caught here and reported once.
+  // The roster is read ONCE for the whole loop. `checkSeat(name)` defaults its
+  // second argument to `loadSeats()`, so calling it per agent re-read and
+  // re-scanned the 49KB litellm.yaml sixteen times at every session start —
+  // 13.5ms of file I/O, before the first frame, to answer sixteen Map lookups
+  // that cost 0.8ms together. `loadSeats` memoises now too, so this is belt and
+  // braces; it is also the version that says what it means.
+  const roster = agents.size ? loadSeats() : null
   for (const a of agents.values()) {
     if (!a.model) continue
-    const v = checkSeat(a.model)
+    const v = checkSeat(a.model, roster)
     if (!v.ok) {
       onNotice?.(`agent ${a.name}: ${v.reason.split('\n')[0]} — it will run on the session seat`)
       a.model = null
@@ -218,6 +227,7 @@ export function createSession({
   let final = ''
   let stopHookActive = false
   let todoNudged = false
+  const startedAt = Date.now()
   // Scoped to this user turn, not the session: globbing the same pattern again
   // in a later turn is ordinary (the tree may have changed) — doing it three
   // times inside one turn is a loop.
@@ -315,6 +325,20 @@ export function createSession({
         continue
       }
 
+      // `agent_completed` — the other half of the notification contract the
+      // brain already implements (notify-desk.sh titles it "Serge finished")
+      // and the engine never fired, so a long turn finished silently and you
+      // learned about it by looking. Gated on duration: a turn that answered in
+      // four seconds was answered while you were watching, and a popup for it is
+      // noise. SERGE_NOTIFY_AFTER=0 turns it off.
+      const took = Date.now() - startedAt
+      if (took >= NOTIFY_AFTER_MS && NOTIFY_AFTER_MS > 0) {
+        void runHooks('Notification', {
+          ...base(),
+          notification_type: 'agent_completed',
+          message: `${(took / 1000).toFixed(0)}s · ${String(final || '').split('\n')[0].slice(0, 140) || 'turn complete'}`,
+        }, 'agent_completed', settings)
+      }
       return { text: final, blocked: false }
     }
 
@@ -338,8 +362,13 @@ export function createSession({
         results.push({ id: call.id, content: `Blocked by PreToolUse hook: ${pre.reason}`, isError: true })
         onToolResult?.(call.name, pre.reason, true)
         onNotice?.(`denied ${call.name}: ${pre.reason}`, 'user')
-        await runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: pre.reason },
-          'permission_prompt', settings)
+        // NO Notification here. This used to fire `permission_prompt`, which the
+        // brain's notify-desk.sh renders as a CRITICAL desktop alert titled
+        // "Serge needs permission" — for a decision that was already made, by a
+        // gate, with nobody being asked anything. Observed on tool-dedupe-guard:
+        // a popup demanding attention for a call the model had already been told
+        // to stop repeating. An alert that names a wait that is not happening
+        // teaches you to ignore alerts, which costs you the one that is real.
         continue
       }
 
@@ -354,6 +383,16 @@ export function createSession({
       // ask them — resolving it to a refusal is only correct when there is
       // nobody to ask, which was true headless and is not true here.
       if (!verdict.allow && verdict.rule === 'ask' && onAsk) {
+        // HERE is the moment a human is genuinely needed: the turn stops until
+        // someone answers. Fired before the await, not after — a notification
+        // that arrives once the wait is over has nothing left to tell you.
+        // Deliberately not awaited: the alert is a side effect, and making the
+        // prompt wait on notify-send would add its latency to every decision.
+        void runHooks('Notification', {
+          ...base(),
+          notification_type: 'permission_prompt',
+          message: `${call.name}: ${verdict.reason}`,
+        }, 'permission_prompt', settings)
         const answer = await onAsk({ tool: call.name, input: call.input, reason: verdict.reason })
         if (answer === 'always') { sessionAllow.add(call.name); verdict = { allow: true, decision: 'allow', reason: 'allowed for this session' } }
         else if (answer === 'yes') verdict = { allow: true, decision: 'allow', reason: 'allowed once' }
@@ -367,11 +406,23 @@ export function createSession({
         results.push({ id: call.id, content: `Permission denied: ${detail}`, isError: true })
         onToolResult?.(call.name, verdict.reason, true)
         onNotice?.(`denied ${call.name}: ${detail}`, 'user')
-        await runHooks('Notification', { ...base(), notification_type: 'permission_prompt', message: verdict.reason },
-          'permission_prompt', settings)
+        // Again: no alert for a denial. Either the user just answered it — in
+        // which case they are at the terminal and know — or policy refused it
+        // without asking, in which case there is nothing to answer.
         await runHooks('PostToolUseFailure',
           { ...payload, tool_response: `Permission denied: ${verdict.reason}` }, call.name, settings)
         continue
+      }
+
+      // AskUserQuestion stops the turn on a person exactly as a permission
+      // prompt does, and the brain has a notification type for it. Without this
+      // the engine went quiet and waited.
+      if (call.name === 'AskUserQuestion' && onQuestion) {
+        void runHooks('Notification', {
+          ...base(),
+          notification_type: 'agent_needs_input',
+          message: String(call.input?.question || 'Serge has a question').slice(0, 160),
+        }, 'agent_needs_input', settings)
       }
 
       const out = await runTool(call.name, call.input, {
@@ -424,7 +475,10 @@ export function createSession({
       }
 
       results.push({ id: call.id, content: boundResult(call.name, content), isError })
-      onToolResult?.(call.name, content, isError)
+      // `out.diff` is UI-only and deliberately not in `content`: the model just
+      // wrote the edit, so echoing it back spends context restating what it
+      // already knows. The reader is the one who has not seen it.
+      onToolResult?.(call.name, content, isError, isError ? null : out.diff ?? null)
     }
 
     transcript.toolResults(results)
