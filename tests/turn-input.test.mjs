@@ -9,6 +9,11 @@
  *    the turn, and it must keep its other job (closing the command menu) when
  *    idle, and must never quit.
  *
+ *    That guard is GONE now — a mid-turn line is queued rather than dropped
+ *    (tests/queued-input.test.mjs), so there is nothing left for escape to be
+ *    ordered ahead of. What this file still pins is the behaviour the ordering
+ *    existed to produce: escape reaches a running turn, and only ever stops it.
+ *
  * 2. THE TICK MUST NOT RE-ARM ITSELF. The 80ms animation interval listed
  *    `stream` and `thinking` in its dependency array and then SET both from
  *    inside the interval. Every flushed chunk therefore tore the interval down
@@ -175,21 +180,24 @@ const input = readFileSync(join(root, 'src/ui/PromptInput.jsx'), 'utf8')
 ok('the tick effect depends on busy alone',
    /setElapsed\(\(Date\.now\(\)[\s\S]{0,320}?\}, \[busy\]\)/.test(app),
    'stream/thinking are back in the dep array — the flicker returns with them')
-// Scoped to the useInput handler, not the whole file. `usePaste` legitimately
-// carries its own `if (busy) return` — a paste behind a running turn is dropped
-// for the same reason a keystroke is — and it is declared above useInput, so a
-// whole-file indexOf found the wrong guard and failed a handler that was
-// correct. The invariant is about the ORDER INSIDE the key handler; say so.
+// Scoped to the useInput handler, not the whole file: `busy` is read in several
+// places in this component and only the key handler's use of it is the subject
+// here.
 const keyHandler = (() => {
   const start = input.indexOf('useInput((input, key) =>')
   const end = input.indexOf('\n  })', start)
   return start < 0 || end < 0 ? '' : input.slice(start, end)
 })()
 ok('the key handler was located', keyHandler.length > 0)
-ok('escape is handled before the busy guard',
+// Was "escape is handled before the busy guard". The guard it had to precede no
+// longer exists, so the assertion is now that it does not come back: a blanket
+// early return is what put escape out of reach the first time, and it would
+// take the queue with it on the way.
+ok('the key handler drops nothing while busy',
    keyHandler.includes('key.escape')
-   && keyHandler.indexOf('key.escape') < keyHandler.indexOf('if (busy) return'),
-   'the guard runs first again, so escape cannot reach a running turn')
+   && !/\n\s*if \(busy\) return(?![a-zA-Z])/.test(keyHandler),
+   'a blanket busy guard is back — escape cannot reach a running turn, and '
+   + 'nothing typed mid-turn can be queued either')
 ok('escape while busy calls the stop path', /if \(busy\) \{ onStop\(\); return \}/.test(input))
 ok('stop only aborts, never exits',
    /const stop = useCallback\(\(\) => \{ abortRef\.current\?\.abort\(\) \}, \[\]\)/.test(app),

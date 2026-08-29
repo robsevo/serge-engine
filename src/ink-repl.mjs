@@ -33,6 +33,7 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
     onAsk: (q) => session.ui?.onAsk?.(q) ?? Promise.resolve('no'),
     onQuestion: (q) => session.ui?.onQuestion?.(q) ?? Promise.resolve(null),
     onTodos: (t) => session.ui?.onTodos?.(t),
+    onInterject: (t) => session.ui?.onInterject?.(t),
     onNotice: (m, kind) => session.ui?.onNotice?.(m, kind),
     onTool: (n, i) => session.ui?.onTool?.(n, i),
     onToolResult: (n, c, e, d) => session.ui?.onToolResult?.(n, c, e, d),

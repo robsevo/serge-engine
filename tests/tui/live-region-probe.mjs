@@ -37,6 +37,13 @@ const session = {
   contextChars: 40000,
   turns: 0,
   ui: null,
+  // A session carries a queue now (loop.mjs): the App drains it at the end of
+  // every turn, so a stub without one is not standing in for a session. Same
+  // rule as the render options below — a probe that differs from what ships is
+  // testing something nobody runs.
+  pending: [],
+  enqueue() { return null },
+  takePending() { return [] },
   async send(text, { signal } = {}) {
     const ui = session.ui
     ui.onTool('Bash', { command: 'echo hello' })

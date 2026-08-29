@@ -118,7 +118,7 @@ export function PromptLine({ value, cursor, maxRows = MAX_INPUT_ROWS }) {
  * Once you type a space you are writing the command's ARGUMENT, and the menu
  * has nothing left to offer, so it closes and gives ↑↓ back to history.
  */
-export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, history, commands, maxRows = MAX_INPUT_ROWS, onHeight }) {
+export function PromptInput({ onSubmit, onQueue, onCycleMode, onInterrupt, onStop, busy, history, commands, maxRows = MAX_INPUT_ROWS, onHeight }) {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
   const [histIdx, setHistIdx] = useState(-1)
@@ -126,7 +126,10 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, 
 
   // Menu state is derived from the text, never stored: a second source of truth
   // for "is the menu open" is a source of truth that can disagree with the line.
-  const query = value.startsWith('/') && !value.includes(' ') ? value.slice(1) : null
+  // Not offered while a turn runs: every command in the catalogue acts on the
+  // session NOW, and none of them can while the loop owns it — so a menu opened
+  // mid-turn is a list of things that will be refused on Enter.
+  const query = !busy && value.startsWith('/') && !value.includes(' ') ? value.slice(1) : null
   const matches = useMemo(
     () => (query === null ? [] : complete(query, commands)),
     [query, commands],
@@ -152,12 +155,12 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, 
    * newline branch in `useInput` stays exactly as it was, because piped and
    * scripted input still arrive that way and must still submit.
    *
-   * Ignored while busy, matching the keystroke rule directly below: a prompt
-   * half-assembled behind a running turn is the thing that guard exists to stop,
-   * and paste-but-not-type would be a strange half-state to leave someone in.
+   * Accepted while busy, matching the keystroke rule directly below. It used to
+   * be dropped, back when a mid-turn line had nowhere to go. It has somewhere to
+   * go now — the queue — and pasting the stack trace you want looked at is the
+   * commonest reason to reach for the keyboard while Serge is still working.
    */
   usePaste((text) => {
-    if (busy) return
     // CRLF from a Windows clipboard, and a trailing newline from copying whole
     // lines — the first would render as a stray character, the second as an
     // empty line under the cursor that nobody typed.
@@ -192,7 +195,16 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, 
       return
     }
 
-    if (busy) return                       // other keystrokes during a turn are ignored
+    // NO BUSY GUARD HERE, deliberately. Every keystroke used to be dropped while
+    // a turn ran, on the reasoning that a prompt half-assembled behind a running
+    // one had nowhere to go. It has somewhere to go now: Enter queues, the loop
+    // hands it over at its next round, and the model decides whether it corrects
+    // the work in flight or joins the list behind it. Typing at a dead keyboard
+    // for the thirty seconds you actually had something to say was a cost that
+    // bought nothing.
+    //
+    // What still cannot happen mid-turn is a slash command — see the Enter
+    // branch, which refuses those rather than parking them.
 
     if (open && key.tab) { set('/' + pick.name + ' '); return }
     if (open && (key.upArrow || key.downArrow)) {
@@ -213,8 +225,16 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, 
       if (open && (value.slice(1) !== pick.name)) { set('/' + pick.name + ' '); return }
       const head = nl >= 0 ? input.slice(0, nl) : ''
       const text = (value.slice(0, cursor) + head + value.slice(cursor)).trim()
-      setValue(''); setCursor(0); setHistIdx(-1); setSel(0)
-      if (text) onSubmit(text)
+      const clear = () => { setValue(''); setCursor(0); setHistIdx(-1); setSel(0) }
+      if (!text) { clear(); return }
+      // While a turn runs, Enter QUEUES rather than sends.
+      //
+      // onQueue answers whether the line was taken, and the box is cleared only
+      // if it was: it refuses a slash command, and retyping a sentence because
+      // the input swallowed it is worse than being told why it did not go.
+      if (busy) { if (onQueue?.(text)) clear(); return }
+      clear()
+      onSubmit(text)
       return
     }
     if (key.backspace || key.delete) {

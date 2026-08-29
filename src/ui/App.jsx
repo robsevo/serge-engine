@@ -8,12 +8,13 @@ import { PromptInput, MAX_INPUT_ROWS } from './PromptInput.jsx'
 import { PermissionPrompt } from './PermissionPrompt.jsx'
 import { QuestionPrompt } from './QuestionPrompt.jsx'
 import { Todos, todoRowsFor, TODO_MAX } from './Todos.jsx'
+import { Queued, queuedRowsFor } from './Queued.jsx'
 import { Rule } from './Rule.jsx'
 import { POSES } from './Clawd.jsx'
 import { renderStatusLineAsync } from '../statusline.mjs'
 import { MODES } from '../permissions.mjs'
 import { loadSpinnerConfig } from '../spinner.mjs'
-import { dispatch } from '../commands.mjs'
+import { dispatch, parseCommand } from '../commands.mjs'
 import { tailToRows, liveBudget } from './live.mjs'
 
 /** Tools whose calls are the agent's own plumbing, not work the reader follows. */
@@ -43,6 +44,10 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   const [ask, setAsk] = useState(null)
   const [question, setQuestion] = useState(null)
   const [todos, setTodos] = useState([])
+  // Typed during a turn, not yet handed to the loop. Mirrors session.pending
+  // rather than owning it: the loop drains that array on its own schedule, so a
+  // copy the UI kept would go stale the moment it did.
+  const [queued, setQueued] = useState([])
   const [stream, setStream] = useState('')
   const streamBuf = useRef('')
   const thinkChars = useRef(0)
@@ -50,6 +55,9 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   const history = useRef([])
   const idRef = useRef(0)
   const abortRef = useRef(null)
+  // submit calls itself to pick up a queue the turn never got to, and a
+  // useCallback cannot name itself.
+  const submitRef = useRef(null)
   const startRef = useRef(0)
   const { exit } = useApp()
 
@@ -281,7 +289,48 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       abortRef.current = null
       refreshStatus()
     }
+
+    // A message still queued now is one the turn never got to.
+    //
+    // The loop drains its own queue while it runs and refuses to finish while
+    // anything is in it, so reaching here with a non-empty queue means the turn
+    // did not finish: escape, an error, or forty rounds without an answer. The
+    // message was still sent by a person, so it becomes the next turn rather
+    // than sitting in a list nothing will read again.
+    const carried = session.takePending()
+    setQueued([])
+    if (carried.length) await submitRef.current?.(carried.map((c) => c.text).join('\n\n'))
   }, [session, push, refreshStatus, seats, mcp, commands, sessions, onExit, exit])
+
+  useEffect(() => { submitRef.current = submit }, [submit])
+
+  /**
+   * Enter while a turn is running.
+   *
+   * Returns whether the line was taken. The input keeps a line it could not
+   * queue rather than clearing it — being told why it did not go beats watching
+   * a sentence you just typed disappear.
+   */
+  const queue = useCallback((text) => {
+    // A slash command is a question about the SESSION, not a message for the
+    // model, and none of them can be answered while the loop owns the session:
+    // `/clear` would drop the history the turn is still writing into, `/cost`
+    // answered three tool calls later is a number about a different moment, and
+    // `/model` would swap the seat mid-conversation. Refused here rather than
+    // parked, so it is clear nothing is waiting to happen.
+    if (parseCommand(text)) {
+      push({
+        kind: 'notice',
+        text: 'commands do not queue — press escape to stop the turn, then run it',
+        tone: 'warn',
+      })
+      return false
+    }
+    history.current.push(text)
+    session.enqueue(text)
+    setQueued(session.pending)
+    return true
+  }, [session, push])
 
   // The session reports into the transcript through these.
   useEffect(() => {
@@ -331,6 +380,17 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
         return new Promise((resolve) => setQuestion({ ...q, resolve }))
       },
       onTodos(t) { setTodos(t) },
+      // The loop has taken the queued messages and put them to the model.
+      //
+      // They land in the transcript HERE — at the point they were handed over,
+      // not the point they were typed. That is where the model actually read
+      // them, so it is where its answer to them begins; placing them earlier
+      // would show a reply arriving before the message it answers.
+      onInterject(texts) {
+        flushStream()
+        for (const t of texts) push({ kind: 'user', text: t })
+        setQueued(session.pending)
+      },
     }
   }, [session, push, flushStream])
 
@@ -371,7 +431,9 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   const extraInputRows = Math.max(0, Math.min(inputRows, inputMax + 1) - 1)
   // A prompt waiting on you outranks prose you can read afterwards.
   const promptRows = question ? 8 + (question.options?.length ?? 0) : ask ? 8 : 0
-  const budget = liveBudget({ rows, todoRows, promptRows: promptRows + extraInputRows })
+  // The queue is live-region height too, and height is the whole game here.
+  const queuedRows = queuedRowsFor(queued)
+  const budget = liveBudget({ rows, todoRows, promptRows: promptRows + extraInputRows + queuedRows })
   const measure = Math.max(24, Math.min(96, cols - 3))
   const live = busy && stream && budget >= 3
     ? tailToRows(stream, budget - 1, measure)
@@ -389,6 +451,7 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
         }]} />
       ) : null}
       <Todos todos={todos} />
+      <Queued pending={queued} />
       {question ? (
         <QuestionPrompt
           question={question.question}
@@ -425,6 +488,7 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       <Rule />
       <PromptInput
         onSubmit={submit}
+        onQueue={queue}
         onCycleMode={cycleMode}
         onInterrupt={interrupt}
         onStop={stop}

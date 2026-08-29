@@ -24,7 +24,7 @@ import { providerConfig, loadSettings, configDir, VERSION } from './config.mjs'
 import { loadSeats, checkSeat, renderSeats } from './seats.mjs'
 import { MODES } from './permissions.mjs'
 import { loadCommands, expandCommand } from './brain.mjs'
-import { catalog } from './commands.mjs'
+import { catalog, parseCommand } from './commands.mjs'
 import { createSpinner, dotPulse } from './spinner.mjs'
 import { renderStatusLine } from './statusline.mjs'
 import { renderStartup, renderHeader } from './startup.mjs'
@@ -256,6 +256,11 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
       if (diff?.lines?.length) say(renderDiffText(diff, { color: Boolean(stdout.isTTY) }) + '\n')
     },
     onAsk: askPermission,
+    // The loop took what was typed mid-turn. Echoed so the transcript shows the
+    // message where the model read it, the same as the Ink front-end does.
+    onInterject: (texts) => {
+      for (const t of texts) say(`  ${C.c}❯${C.x} ${C.dim}${t}${C.x}\n`)
+    },
   })
 
   stdout.write(renderStartup({
@@ -305,6 +310,9 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
 
   let generating = null          // AbortController while a turn is in flight
   let pendingExit = false        // armed by a Ctrl+C at an empty prompt
+  // Lines already taken by the mid-turn listener below, awaiting their echo out
+  // of the `for await`. See the listener for why a counter is enough.
+  let swallowed = 0
   // rl.close() does not end the for-await immediately — the iterator drains
   // whatever is already buffered first. Prompting during that drain throws
   // ERR_USE_AFTER_CLOSE, which is how /exit crashed instead of exiting.
@@ -314,6 +322,31 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
   // stdin reaching EOF closes readline without going through /exit, so `closing`
   // alone is not enough to know whether resume/prompt are still legal.
   rl.on('close', () => { closing = true })
+
+  // Typing during a turn.
+  //
+  // readline delivers a line to BOTH this listener and the `for await` below —
+  // the async iterator is itself a 'line' listener — so a line typed mid-turn
+  // would otherwise be queued here AND submitted as a fresh prompt when the
+  // iterator caught up. A counter is enough to drop the echo because both see
+  // the same events in the same order: FIFO in, FIFO out.
+  //
+  // (`rl.pause()` used to sit at the top of the turn instead, which is what made
+  // the keyboard dead until it finished.)
+  rl.on('line', (l) => {
+    if (!generating) return
+    const text = String(l).trim()
+    swallowed++
+    if (!text) return
+    // Commands act on the session NOW and cannot while the loop owns it.
+    if (parseCommand(text)) {
+      say(`  ${C.y}commands do not queue — Ctrl+C to stop the turn, then run it${C.x}\n`)
+      return
+    }
+    session.enqueue(text)
+    const n = session.pending.length
+    say(`  ${C.y}⋯ queued${C.x} ${C.dim}· ${n} message(s), handed over at the next step${C.x}\n`)
+  })
 
   // shift+tab cycles the permission mode, the way serge does. readline does not
   // surface it, so the raw sequence is intercepted before it reaches the line
@@ -374,6 +407,11 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     const label = { yes: `${C.g}allowed once`, always: `${C.g}always for ${tool}`, no: `${C.r}declined` }[answer]
     stdout.write(`${label}${C.x}\n\n`)
     prompting = wasPrompting
+    // Give readline the keyboard back. It was paused so it would not also eat
+    // the keypress above; the turn no longer pauses it, so this is now the only
+    // resume, and without it the first permission prompt would leave the input
+    // dead for the rest of the turn.
+    if (!closing) rl.resume()
     // Ctrl+C at the prompt means "stop the whole turn", not just "decline this
     // one call" — otherwise the model retries and asks again immediately.
     if (key === '\u0003' && generating) generating.abort()
@@ -487,6 +525,9 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
 
   for await (const line of rl) {
     if (closing) break
+    // Already taken mid-turn by the listener above; this is only the iterator
+    // catching up on an event it also received.
+    if (swallowed > 0) { swallowed--; prompt(); continue }
     pendingExit = false
     const text = line.trim()
     if (!text) { prompt(); continue }
@@ -504,53 +545,65 @@ export async function repl({ cwd, model, permissionMode, mcp = null, resumeFrom 
     // A brain command expands into a prompt; anything else is the prompt itself.
     const toSend = (handled && handled.prompt) ? handled.prompt : text
 
-    generating = new AbortController()
-    // Pause input while the model streams: keystrokes typed mid-generation
-    // would otherwise interleave with the output and land in the next prompt.
-    rl.pause()
-    streaming = false
-    atLineStart = true
-    firstLine = true
+    // NOT paused. Input stays live for the whole turn; the listener above
+    // routes what is typed into the session queue, and the loop hands it to the
+    // model at its next round.
+    // Captured before the FIRST turn, and read after the last: a carried
+    // follow-up is part of what this prompt cost, so the total has to span the
+    // whole while-loop rather than only its final pass.
     const before = session.usage
-    let tick
-    if (pane.enabled) {
-      spinner.begin()
-      tick = setInterval(() => {
-        const u = session.usage
-        const t = u.prompt + u.completion - before.prompt - before.completion
-        spinner.update(t > 0 ? `${fmt(t)} tok` : '')
-        tickCount++
-        paintInline(tickCount)
-        paintPane(true)
-      }, 100)
-    } else {
-      spinner.start()
-      tick = setInterval(() => {
-        const u = session.usage
-        const t = u.prompt + u.completion - before.prompt - before.completion
-        if (t > 0) spinner.update(`${fmt(t)} tok`)
-      }, 1000)
-    }
-    tick.unref?.()
-    try {
-      const res = await session.send(toSend, { signal: generating.signal })
-      if (res.blocked) {
-        stdout.write(`${C.y}  blocked: ${res.reason}${C.x}\n`)
-      } else if (res.exhausted) {
-        stdout.write(`\n${C.y}  · turn budget exhausted without a final answer${C.x}\n`)
+    let carry = toSend
+    while (carry) {
+      generating = new AbortController()
+      streaming = false
+      atLineStart = true
+      firstLine = true
+      let tick
+      if (pane.enabled) {
+        spinner.begin()
+        tick = setInterval(() => {
+          const u = session.usage
+          const t = u.prompt + u.completion - before.prompt - before.completion
+          spinner.update(t > 0 ? `${fmt(t)} tok` : '')
+          tickCount++
+          paintInline(tickCount)
+          paintPane(true)
+        }, 100)
+      } else {
+        spinner.start()
+        tick = setInterval(() => {
+          const u = session.usage
+          const t = u.prompt + u.completion - before.prompt - before.completion
+          if (t > 0) spinner.update(`${fmt(t)} tok`)
+        }, 1000)
       }
-      if (streaming) stdout.write('\n')
-    } catch (e) {
-      const aborted = e?.name === 'AbortError' || generating.signal.aborted
-      if (!aborted) stdout.write(`\n${C.r}  error: ${e?.message ?? e}${C.x}\n`)
-      else stdout.write('\n')
-    } finally {
-      clearInterval(tick)
-      spinner.stop()
-      clearInline()
-      paintPane()
-      generating = null
-      if (!closing) rl.resume()
+      tick.unref?.()
+      try {
+        const res = await session.send(carry, { signal: generating.signal })
+        if (res.blocked) {
+          stdout.write(`${C.y}  blocked: ${res.reason}${C.x}\n`)
+        } else if (res.exhausted) {
+          stdout.write(`\n${C.y}  · turn budget exhausted without a final answer${C.x}\n`)
+        }
+        if (streaming) stdout.write('\n')
+      } catch (e) {
+        const aborted = e?.name === 'AbortError' || generating.signal.aborted
+        if (!aborted) stdout.write(`\n${C.r}  error: ${e?.message ?? e}${C.x}\n`)
+        else stdout.write('\n')
+      } finally {
+        clearInterval(tick)
+        spinner.stop()
+        clearInline()
+        paintPane()
+        generating = null
+      }
+
+      // Anything still queued is something the turn never reached — it aborted,
+      // errored, or ran out of rounds. It was still typed by a person, so it
+      // becomes the next turn.
+      const left = session.takePending()
+      carry = left.length ? left.map((c) => c.text).join('\n\n') : null
+      if (carry) stdout.write(`  ${C.dim}↩ picking up ${left.length} queued message(s)${C.x}\n`)
     }
 
     const u = session.usage

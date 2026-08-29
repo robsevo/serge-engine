@@ -69,8 +69,44 @@ function boundResult(name, content) {
  * transcript, whether SessionStart has fired — lives here rather than inside
  * the turn, which is what makes the second prompt aware of the first.
  */
+/**
+ * How a message typed mid-turn is put to the model.
+ *
+ * TRIAGED, not obeyed. The two failures this exists to prevent are opposites and
+ * both are silent: a correction ("no, tabs") filed away as a new task is a
+ * redirection the user believes landed and did not, and a new request ("also
+ * add a test") acted on immediately abandons the work already in flight halfway
+ * through. Neither announces itself, so the outcomes are named here rather than
+ * left to judgement.
+ *
+ * The model makes the call, not a classifier out here, because "does this change
+ * what I am doing" is a question about what it is currently doing — and only one
+ * of the two has read the last forty messages.
+ *
+ * TodoWrite is the queue the user actually sees: Todos.jsx renders it live above
+ * the input, so "put it on the list" and "show me the list" are one act rather
+ * than two, and a later message that changes queued work rewrites the step
+ * instead of racing it.
+ */
+export function interjection(texts) {
+  const list = texts.map((t) => `  · ${JSON.stringify(t)}`).join('\n')
+  return 'The user typed this while you were working — it arrived mid-turn, after '
+    + `the request you are currently answering:\n\n${list}\n\n`
+    + 'Decide what it is before you act on it:\n\n'
+    + '  · A CORRECTION to the work in flight — different wording, different logic, '
+    + 'a detail you have wrong. Fold it into what you are doing and carry on. '
+    + 'Do not start over.\n'
+    + '  · SEPARATE WORK. Do not switch to it. Add it to the todo list with TodoWrite, '
+    + 'keeping every step already there, and finish the current task first.\n'
+    + '  · A CHANGE TO WORK ALREADY ON THE LIST — rewrite that step with TodoWrite '
+    + 'rather than adding a second one that contradicts it.\n\n'
+    + 'Then say in one line which it was, so the user knows whether it landed in '
+    + 'this turn or is still waiting.'
+}
+
 export function createSession({
   cwd, model, onToken, onReasoning, onNotice, onTool, onToolResult, onAsk, onQuestion, onTodos,
+  onInterject,
   permissionMode = 'default',
   mcp = null, resumeFrom = null, forkParent = null, loadBrain = true,
 }) {
@@ -96,6 +132,15 @@ export function createSession({
   // Cumulative across the session, so the status line reflects the conversation
   // rather than the last request.
   const usage = { prompt: 0, completion: 0, requests: 0 }
+
+  // Messages typed while a turn was already running.
+  //
+  // NOT a second conversation. A second `send` against a session that is
+  // already generating is two turns sharing one history, and whichever finished
+  // last would overwrite the other's idea of what was said. These are handed to
+  // the loop already running, at its next round, framed by `interjection` so the
+  // model triages each one before acting on it.
+  let pending = []
 
   // Skills are session-scoped: the index goes into context once, and the Skill
   // tool that reads a body is built against THIS session's set.
@@ -253,6 +298,24 @@ export function createSession({
       for (const c of pc.context) messages.push({ role: 'system', content: c })
     }
 
+    // Anything typed since the last round, handed over now.
+    //
+    // AFTER compaction, never before: compaction rewrites the history into a
+    // summary, and a message that arrived two seconds ago being summarised away
+    // before the model has read it once is precisely the loss the queue exists
+    // to prevent.
+    //
+    // All of them in ONE message, so the framing is stated once and the model
+    // sees three interjections as three related things a person said rather
+    // than as three separate demands to reconsider.
+    if (pending.length) {
+      const texts = pending.map((p) => p.text)
+      pending = []
+      transcript.userPrompt(texts.join('\n\n'))
+      messages.push({ role: 'user', content: interjection(texts) })
+      onInterject?.(texts)
+    }
+
     const { text, toolCalls, usage: u } = await complete({
       ...provider,
       messages,
@@ -271,6 +334,21 @@ export function createSession({
       final = text
       if (text) transcript.assistantText(text, u)
       messages.push({ role: 'assistant', content: text })
+
+      // A turn with an unread message in it has not ended, so round-trip
+      // instead of finishing — the drain at the top of the loop hands it over.
+      //
+      // The gates below all judge a FINISHED turn: Stop records the session as
+      // wrapped up, the task-evidence gate asks whether the claims are backed,
+      // the todo nudge asks why steps are still open. Running any of them now
+      // asks "is this done?" of work that has not started, and firing the
+      // completion notification would say the turn finished to someone who is
+      // still typing into it.
+      //
+      // This is also the only thing standing between a message typed in the last
+      // half-second of a turn and being stranded until the next prompt — which
+      // from the outside is indistinguishable from the input having dropped it.
+      if (pending.length) continue
 
       let stop
       try {
@@ -513,6 +591,33 @@ export function createSession({
     get resumed() { return resumed },
     /** Drop history but keep the session — the transcript still records it. */
     clear() { messages = []; return true },
+
+    /**
+     * Take a message typed while a turn is running.
+     *
+     * The loop drains this at its next round — between tool calls, or in place
+     * of finishing — so a message typed mid-turn reaches the model during the
+     * turn it was aimed at rather than after it.
+     */
+    enqueue(text) {
+      const t = String(text ?? '').trim()
+      if (!t) return null
+      const item = { text: t, at: Date.now() }
+      pending.push(item)
+      return item
+    },
+    /** Live view for the front-end's "waiting to be handed over" list. */
+    get pending() { return [...pending] },
+    /**
+     * Empty the queue and return what was in it.
+     *
+     * For a turn that ended WITHOUT draining it — an escape, an error, a turn
+     * out of rounds. The loop drains its own queue while it runs, so anything
+     * still here means the turn never got to it; it is still something the user
+     * said, and the caller makes it the next turn rather than leaving it in a
+     * list nothing will ever read.
+     */
+    takePending() { const p = pending; pending = []; return p },
   }
 }
 
