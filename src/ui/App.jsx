@@ -4,7 +4,7 @@ import { Messages } from './Messages.jsx'
 import { SergeBar } from './SergeBar.jsx'
 import { StatusBar } from './StatusBar.jsx'
 import { Spinner } from './Spinner.jsx'
-import { PromptInput } from './PromptInput.jsx'
+import { PromptInput, MAX_INPUT_ROWS } from './PromptInput.jsx'
 import { PermissionPrompt } from './PermissionPrompt.jsx'
 import { QuestionPrompt } from './QuestionPrompt.jsx'
 import { Todos, todoRowsFor, TODO_MAX } from './Todos.jsx'
@@ -85,6 +85,11 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   // Rows matter as much as columns now: the live region is budgeted against
   // them, and a budget computed from a stale height is the bug it prevents.
   const [rows, setRows] = useState(process.stdout.rows || 24)
+  // How tall the input has grown. It is one row until something multi-line is
+  // pasted into it, and it is part of the live region either way — so the budget
+  // below has to know, or a pasted stack trace puts the frame back over the
+  // viewport and Ink starts wiping the terminal again.
+  const [inputRows, setInputRows] = useState(1)
   const [resizeTick, setResizeTick] = useState(0)
   const [tall, setTall] = useState(false)
 
@@ -360,9 +365,13 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   // The tail is what you want anyway: it is the part still being written. The
   // whole reply lands in scrollback intact the moment the turn commits it.
   const todoRows = todoRowsFor(todos)
+  // CHROME_ROWS already counts ONE row for the input, so only the extra rows a
+  // multi-line value adds come out of the streaming reply's share.
+  const inputMax = Math.max(1, Math.min(MAX_INPUT_ROWS, Math.floor((rows - 12) / 2)))
+  const extraInputRows = Math.max(0, Math.min(inputRows, inputMax + 1) - 1)
   // A prompt waiting on you outranks prose you can read afterwards.
   const promptRows = question ? 8 + (question.options?.length ?? 0) : ask ? 8 : 0
-  const budget = liveBudget({ rows, todoRows, promptRows })
+  const budget = liveBudget({ rows, todoRows, promptRows: promptRows + extraInputRows })
   const measure = Math.max(24, Math.min(96, cols - 3))
   const live = busy && stream && budget >= 3
     ? tailToRows(stream, budget - 1, measure)
@@ -422,6 +431,8 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
         busy={busy}
         history={history.current}
         commands={commands}
+        maxRows={inputMax}
+        onHeight={setInputRows}
       />
       <Rule />
       <StatusBar status={status} mode={mode} ctx={ctx} />

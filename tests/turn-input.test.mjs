@@ -175,8 +175,20 @@ const input = readFileSync(join(root, 'src/ui/PromptInput.jsx'), 'utf8')
 ok('the tick effect depends on busy alone',
    /setElapsed\(\(Date\.now\(\)[\s\S]{0,320}?\}, \[busy\]\)/.test(app),
    'stream/thinking are back in the dep array — the flicker returns with them')
+// Scoped to the useInput handler, not the whole file. `usePaste` legitimately
+// carries its own `if (busy) return` — a paste behind a running turn is dropped
+// for the same reason a keystroke is — and it is declared above useInput, so a
+// whole-file indexOf found the wrong guard and failed a handler that was
+// correct. The invariant is about the ORDER INSIDE the key handler; say so.
+const keyHandler = (() => {
+  const start = input.indexOf('useInput((input, key) =>')
+  const end = input.indexOf('\n  })', start)
+  return start < 0 || end < 0 ? '' : input.slice(start, end)
+})()
+ok('the key handler was located', keyHandler.length > 0)
 ok('escape is handled before the busy guard',
-   input.indexOf('key.escape') < input.indexOf('if (busy) return'),
+   keyHandler.includes('key.escape')
+   && keyHandler.indexOf('key.escape') < keyHandler.indexOf('if (busy) return'),
    'the guard runs first again, so escape cannot reach a running turn')
 ok('escape while busy calls the stop path', /if \(busy\) \{ onStop\(\); return \}/.test(input))
 ok('stop only aborts, never exits',

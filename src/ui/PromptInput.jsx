@@ -1,9 +1,28 @@
-import React, { useState, useMemo } from 'react'
-import { Box, Text, useInput } from 'ink'
+import React, { useState, useMemo, useEffect } from 'react'
+import { Box, Text, useInput, usePaste } from 'ink'
 import { complete } from '../commands.mjs'
 
 const BLUE = '#6EB4E6'
 const MAX_ROWS = 8
+
+/**
+ * Most rows the input itself may occupy.
+ *
+ * Bounded because the input is part of the LIVE region, and a live region taller
+ * than the viewport is what makes Ink wipe the terminal on every frame
+ * (ui/live.mjs). Pasting a 300-line stack trace must not reintroduce that, so a
+ * long value is windowed onto the end and the rest is counted.
+ */
+export const MAX_INPUT_ROWS = 6
+
+/** Rows `PromptLine` will draw — App budgets the live region against this, so
+ *  the two have to agree. Kept beside the render for that reason. */
+export function promptRowsFor(value, maxRows = MAX_INPUT_ROWS) {
+  const lines = String(value ?? '').split('\n')
+  if (lines.length === 1) return 1
+  const shown = Math.min(lines.length, Math.max(1, maxRows))
+  return shown + (lines.length > shown ? 1 : 0)
+}
 
 /**
  * The line itself: prompt marker, text, block cursor.
@@ -19,16 +38,71 @@ const MAX_ROWS = 8
  * Pure on purpose: the keyboard lives in PromptInput, so this can be rendered at
  * any width with any cursor position — see tests/prompt-wrap.test.mjs.
  */
-export function PromptLine({ value, cursor }) {
+export function PromptLine({ value, cursor, maxRows = MAX_INPUT_ROWS }) {
   const c = Math.min(cursor, value.length)
+
+  // The single-line case is left exactly as it was — one <Text>, nothing
+  // nested beside it — because that shape is the fix for the wrap bug above and
+  // tests/prompt-wrap.test.mjs pins it character for character.
+  if (!value.includes('\n')) {
+    return (
+      <Box>
+        <Text wrap="wrap">
+          <Text color={BLUE}>{'❯ '}</Text>
+          {value.slice(0, c)}
+          <Text inverse>{value[c] ?? ' '}</Text>
+          {value.slice(c + 1)}
+        </Text>
+      </Box>
+    )
+  }
+
+  // Multi-line: one <Text> per line, same nesting rule within each.
+  const lines = value.split('\n')
+  // Where the cursor sits, in (row, column). Each line costs its length plus the
+  // newline that ended it.
+  let row = 0
+  let col = c
+  for (const line of lines) {
+    if (col <= line.length) break
+    col -= line.length + 1
+    row++
+  }
+  const cap = Math.max(1, maxRows)
+  // Window onto the END, keeping the cursor's row on screen: after a paste the
+  // cursor is at the end, and the end is what you are about to type against.
+  const start = lines.length <= cap
+    ? 0
+    : Math.min(Math.max(0, row - cap + 1), lines.length - cap)
+  const shown = lines.slice(start, start + cap)
+  const hidden = lines.length - shown.length
+
   return (
-    <Box>
-      <Text wrap="wrap">
-        <Text color={BLUE}>{'❯ '}</Text>
-        {value.slice(0, c)}
-        <Text inverse>{value[c] ?? ' '}</Text>
-        {value.slice(c + 1)}
-      </Text>
+    <Box flexDirection="column">
+      {hidden ? <Text dimColor>{`  … ${hidden} more line(s)`}</Text> : null}
+      {shown.map((line, i) => {
+        const n = start + i
+        // On the first VISIBLE row, not on line 0: once a long paste has
+        // scrolled, line 0 is off screen and keying the marker to it left the
+        // box with no marker at all — it stopped looking like an input.
+        const marker = i === 0 ? '❯ ' : '  '
+        if (n !== row) {
+          return (
+            <Text key={n} wrap="wrap">
+              <Text color={BLUE}>{marker}</Text>
+              {line}
+            </Text>
+          )
+        }
+        return (
+          <Text key={n} wrap="wrap">
+            <Text color={BLUE}>{marker}</Text>
+            {line.slice(0, col)}
+            <Text inverse>{line[col] ?? ' '}</Text>
+            {line.slice(col + 1)}
+          </Text>
+        )
+      })}
     </Box>
   )
 }
@@ -44,7 +118,7 @@ export function PromptLine({ value, cursor }) {
  * Once you type a space you are writing the command's ARGUMENT, and the menu
  * has nothing left to offer, so it closes and gives ↑↓ back to history.
  */
-export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, history, commands }) {
+export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, history, commands, maxRows = MAX_INPUT_ROWS, onHeight }) {
   const [value, setValue] = useState('')
   const [cursor, setCursor] = useState(0)
   const [histIdx, setHistIdx] = useState(-1)
@@ -61,6 +135,43 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, 
   const pick = matches[Math.min(sel, matches.length - 1)]
 
   const set = (v, c = v.length) => { setValue(v); setCursor(c); setSel(0) }
+
+  /**
+   * A paste is text, not a command to run it.
+   *
+   * Before this, pasting anything with a newline SUBMITTED THE FIRST LINE AND
+   * DISCARDED THE REST. The handler below looks for a newline inside `input`
+   * because piped input arrives that way, and a terminal without bracketed paste
+   * mode delivers a paste through exactly the same channel — indistinguishable.
+   * So pasting a six-line function and asking for a review sent one sentence and
+   * threw the function away, silently, and the answer was about the sentence.
+   *
+   * `usePaste` turns bracketed paste mode on (ESC[?2004h), so the terminal wraps
+   * pasted text in ESC[200~ … ESC[201~ and Ink routes it here instead of to
+   * `useInput` — which is what finally makes the two distinguishable. The
+   * newline branch in `useInput` stays exactly as it was, because piped and
+   * scripted input still arrive that way and must still submit.
+   *
+   * Ignored while busy, matching the keystroke rule directly below: a prompt
+   * half-assembled behind a running turn is the thing that guard exists to stop,
+   * and paste-but-not-type would be a strange half-state to leave someone in.
+   */
+  usePaste((text) => {
+    if (busy) return
+    // CRLF from a Windows clipboard, and a trailing newline from copying whole
+    // lines — the first would render as a stray character, the second as an
+    // empty line under the cursor that nobody typed.
+    const chunk = String(text ?? '').replace(/\r\n?/g, '\n').replace(/\n+$/, '')
+    if (!chunk) return
+    setValue(value.slice(0, cursor) + chunk + value.slice(cursor))
+    setCursor(cursor + chunk.length)
+    setSel(0)
+  })
+
+  // The live region is budgeted against this (ui/live.mjs), and only this
+  // component knows how tall it is about to be.
+  const rows = promptRowsFor(value, maxRows)
+  useEffect(() => { onHeight?.(rows) }, [rows, onHeight])
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') { onInterrupt(); return }
@@ -127,6 +238,15 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, 
       set(i < 0 ? '' : (history[history.length - 1 - i] ?? ''))
       return
     }
+    // A newline you asked for. Enter submits — that has to stay predictable, or
+    // a multi-line value becomes impossible to send — so the second line needs
+    // its own key. ctrl-j is what readline has always used for it.
+    if (key.ctrl && (input === 'j' || input === '\n')) {
+      setValue(value.slice(0, cursor) + '\n' + value.slice(cursor))
+      setCursor(cursor + 1)
+      setSel(0)
+      return
+    }
     if (key.ctrl && input === 'a') { setCursor(0); return }
     if (key.ctrl && input === 'e') { setCursor(value.length); return }
     if (key.ctrl && input === 'u') { set(value.slice(cursor), 0); return }
@@ -147,7 +267,7 @@ export function PromptInput({ onSubmit, onCycleMode, onInterrupt, onStop, busy, 
 
   return (
     <Box flexDirection="column">
-      <PromptLine value={value} cursor={c} />
+      <PromptLine value={value} cursor={c} maxRows={maxRows} />
       {open ? (
         <Box flexDirection="column" marginTop={0}>
           {shown.map((m, i) => {
