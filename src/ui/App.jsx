@@ -7,13 +7,14 @@ import { Spinner } from './Spinner.jsx'
 import { PromptInput } from './PromptInput.jsx'
 import { PermissionPrompt } from './PermissionPrompt.jsx'
 import { QuestionPrompt } from './QuestionPrompt.jsx'
-import { Todos } from './Todos.jsx'
+import { Todos, todoRowsFor, TODO_MAX } from './Todos.jsx'
 import { Rule } from './Rule.jsx'
 import { POSES } from './Clawd.jsx'
-import { renderStatusLine } from '../statusline.mjs'
+import { renderStatusLineAsync } from '../statusline.mjs'
 import { MODES } from '../permissions.mjs'
 import { loadSpinnerConfig } from '../spinner.mjs'
 import { dispatch } from '../commands.mjs'
+import { tailToRows, liveBudget } from './live.mjs'
 
 /** Tools whose calls are the agent's own plumbing, not work the reader follows. */
 const QUIET_TOOLS = new Set(['Skill'])
@@ -81,12 +82,16 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   // the spacer stuck on screen as a permanent gap. Dragging a window fires many
   // resize events, so that state was reached immediately.
   const [cols, setCols] = useState(process.stdout.columns || 80)
+  // Rows matter as much as columns now: the live region is budgeted against
+  // them, and a budget computed from a stale height is the bug it prevents.
+  const [rows, setRows] = useState(process.stdout.rows || 24)
   const [resizeTick, setResizeTick] = useState(0)
   const [tall, setTall] = useState(false)
 
   useEffect(() => {
     const onResize = () => {
       setCols(process.stdout.columns || 80)
+      setRows(process.stdout.rows || 24)
       setResizeTick((n) => n + 1)
     }
     process.stdout.on('resize', onResize)
@@ -111,12 +116,37 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
     setDone((prev) => [...prev, { ...row, id: ++idRef.current }])
   }, [])
 
+  /**
+   * Commit whatever prose has streamed so far and start the live buffer over.
+   *
+   * Two bugs in one. The buffer was NEVER cleared inside a turn, so a turn with
+   * five tool calls held all five preambles in the live region at once, growing
+   * without bound — which is precisely the height that makes Ink wipe the
+   * terminal on every frame (ui/live.mjs). And only the FINAL text was ever
+   * pushed to <Static>, so every one of those preambles vanished when the turn
+   * ended: text you watched arrive, gone from the transcript.
+   *
+   * Called at the boundaries where prose is finished by definition — a tool
+   * call, a gate sending the turn back — so the committed copy is a whole
+   * message, not a fragment, and `renderMarkdown` sees a complete fence.
+   */
+  const flushStream = useCallback(() => {
+    const text = streamBuf.current.trim()
+    streamBuf.current = ''
+    setStream('')
+    if (text) push({ kind: 'text', text })
+  }, [push])
+
+  // Awaited, never spawnSync. The status line is a shell script the brain owns,
+  // it is allowed five seconds, and a synchronous spawn spends every one of them
+  // with the event loop stopped — no frames, no timers, no keystrokes. The
+  // context meter does not wait on it: that number is ours and is instant.
   const refreshStatus = useCallback(() => {
-    setStatus(renderStatusLine({
+    setCtx(Math.min(99, Math.round((session.contextChars / COMPACT_AT) * 100)))
+    renderStatusLineAsync({
       settings, sessionId: session.sessionId, cwd,
       model: session.model, usage: session.usage,
-    }) || session.model)
-    setCtx(Math.min(99, Math.round((session.contextChars / COMPACT_AT) * 100)))
+    }).then((line) => setStatus(line || session.model))
   }, [session, settings, cwd])
 
   useEffect(() => { refreshStatus() }, [refreshStatus])
@@ -214,6 +244,19 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       const res = await session.send(text, { signal: abortRef.current.signal })
       if (res.blocked) push({ kind: 'notice', text: `blocked: ${res.reason}`, tone: 'warn' })
       else if (res.text) push({ kind: 'text', text: res.text })
+      // A turn CAN end with no words: the model ran tools, the last round
+      // produced only a tool call, and `final` stayed empty. Printing nothing
+      // for that is why it reads as a freeze — the spinner stops, "Done" appears,
+      // and the screen looks exactly like a turn that answered off-screen. Say
+      // what happened instead.
+      // Exhaustion already announced itself through onNotice, so this is only
+      // for the quiet case: a turn that simply stopped having anything to say.
+      else if (!res.exhausted) push({
+        kind: 'notice',
+        text: 'the turn ended without a reply — it ran tools and then stopped. '
+          + 'Ask it to summarise what it found, or say what you wanted.',
+        tone: 'warn',
+      })
       // The live region held the same text while it streamed; clearing it here
       // (after the committed copy is pushed) is what hands the reply over to
       // scrollback. Clearing earlier makes it flicker out and back in.
@@ -239,12 +282,15 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   useEffect(() => {
     session.ui = {
       onTool(name, input) {
+        // Prose that arrived before a tool call is finished prose — commit it
+        // before the tool row lands so the two stay in the order they happened.
+        flushStream()
         if (QUIET_TOOLS.has(name)) return
         const a = String(input?.command || input?.file_path || input?.pattern
           || input?.query || input?.name || '').replace(/\s+/g, ' ').slice(0, 68)
         push({ kind: 'tool', name, args: a, done: true })
       },
-      onToolResult(name, content, isError) {
+      onToolResult(name, content, isError, diff = null) {
         if (QUIET_TOOLS.has(name) && !isError) return
         const lines = String(content ?? '').trim().split('\n').filter((l) => l.trim())
         push({
@@ -253,8 +299,16 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
           extra: lines.length > 1 ? `${lines.length - 1} line${lines.length === 2 ? '' : 's'}` : '',
           isError,
         })
+        // The change itself, under the one-line summary. Edit/Write/MultiEdit
+        // used to report "applied 3 edit(s)" and nothing else, so a session that
+        // rewrote your files showed you none of what it wrote.
+        if (diff?.lines?.length) push({ kind: 'diff', diff })
       },
       onNotice(m, kind = 'user') {
+        // A gate bouncing the turn back ends the message that preceded it, the
+        // same way a tool call does — commit it rather than letting the next
+        // attempt's text pile up on top of it in the live region.
+        flushStream()
         // Gate feedback is addressed to the model; a marker says one fired.
         if (kind === 'model') { push({ kind: 'result', text: `${String(m).split(':')[0]} — sent back` }); return }
         push({ kind: 'notice', text: m })
@@ -273,7 +327,7 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
       },
       onTodos(t) { setTodos(t) },
     }
-  }, [session, push])
+  }, [session, push, flushStream])
 
   const cycleMode = useCallback(() => {
     const next = CYCLE[(CYCLE.indexOf(mode) + 1) % CYCLE.length]
@@ -292,13 +346,39 @@ export function App({ session, settings, cwd, version, commands, seats, mcp, ses
   // idle prompt is not, so it must not inherit interrupt()'s exit half.
   const stop = useCallback(() => { abortRef.current?.abort() }, [])
 
+  // How much of the streaming reply may be on screen.
+  //
+  // This is the whole fix for the flicker. Ink switches to
+  // `clearTerminal + replay the entire transcript` the moment a frame is taller
+  // than the viewport (ui/live.mjs has the measurements), and the streaming
+  // reply was the only thing in the live region with no ceiling — so every reply
+  // longer than ~18 lines wiped the screen and redrew from the top, once per
+  // 80ms animation tick. Keeping the frame inside the viewport is what stops it;
+  // nothing else can, because Ink counts string lines and the terminal counts
+  // rows, and after a wrap neither side knows the other's number.
+  //
+  // The tail is what you want anyway: it is the part still being written. The
+  // whole reply lands in scrollback intact the moment the turn commits it.
+  const todoRows = todoRowsFor(todos)
+  // A prompt waiting on you outranks prose you can read afterwards.
+  const promptRows = question ? 8 + (question.options?.length ?? 0) : ask ? 8 : 0
+  const budget = liveBudget({ rows, todoRows, promptRows })
+  const measure = Math.max(24, Math.min(96, cols - 3))
+  const live = busy && stream && budget >= 3
+    ? tailToRows(stream, budget - 1, measure)
+    : null
+
   return (
     <Box flexDirection="column">
       {/* The over-tall frame: one render past the viewport, which is what makes
           Ink clear and replay everything. It is on screen for a single tick. */}
-      {tall ? <Box height={(process.stdout.rows || 24) + 1} /> : null}
+      {tall ? <Box height={rows + 1} /> : null}
       <Static items={done}>{(m) => <Messages key={m.id} items={[m]} />}</Static>
-      {busy && stream ? <Messages items={[{ id: 'stream', kind: 'text', text: stream }]} /> : null}
+      {live ? (
+        <Messages items={[{
+          id: 'stream', kind: 'text', text: live.text, truncated: live.hidden,
+        }]} />
+      ) : null}
       <Todos todos={todos} />
       {question ? (
         <QuestionPrompt

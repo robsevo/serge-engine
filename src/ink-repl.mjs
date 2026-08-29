@@ -35,7 +35,7 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
     onTodos: (t) => session.ui?.onTodos?.(t),
     onNotice: (m, kind) => session.ui?.onNotice?.(m, kind),
     onTool: (n, i) => session.ui?.onTool?.(n, i),
-    onToolResult: (n, c, e) => session.ui?.onToolResult?.(n, c, e),
+    onToolResult: (n, c, e, d) => session.ui?.onToolResult?.(n, c, e, d),
   })
 
   stdout.write(renderStartup({
@@ -63,7 +63,31 @@ export async function inkRepl({ cwd, model, permissionMode, mcp = null, resumeFr
       session, settings, cwd, version: VERSION, commands, seats, mcp,
       sessions: listSessions(cwd, 20),
     }),
-    { exitOnCtrlC: false },
+    {
+      exitOnCtrlC: false,
+      // PER-LINE DIFFS, not whole-region repaints.
+      //
+      // Ink's default renderer writes `eraseLines(previousLineCount) + theWholeFrame`
+      // for every frame it emits (log-update.js `createStandard`). The live region
+      // here is about nine rows — mascot, identity, two rules, the input line, the
+      // status bar — so ONE KEYSTROKE erased and redrew all nine. Measured on a
+      // 110x32 pty, typing "hello world":
+      //
+      //     standard      55,968 bytes   99 rows erased   (9.0 per keystroke)
+      //     incremental    1,067 bytes    0 rows erased   (0.0 per keystroke)
+      //
+      // That is the flicker in the input box while typing, and the same repaint
+      // runs on every 80ms animation tick while a turn is in flight. Ink ships the
+      // incremental renderer (`createIncremental`) but leaves it off by default;
+      // it rewrites only the lines that actually differ, which for a keystroke is
+      // one line.
+      //
+      // It does NOT replace the overflow work in ui/live.mjs. That fix stops Ink
+      // taking the clear-the-terminal path at all; this one makes the frames it
+      // does write cheap. Both are needed, and tests/live-region.test.mjs pins the
+      // first with this enabled.
+      incrementalRendering: true,
+    },
   )
 
   // Ink clears the screen only when the terminal gets NARROWER (ink.js:281).
