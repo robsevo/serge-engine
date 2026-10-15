@@ -597,7 +597,7 @@ what happened rather than what the model said happened.
 
 ## 8. License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Notes on what the licence covers: [NOTICE](NOTICE).
 
 The brain it serves,
 [serge-brain](https://github.com/robsevo/serge-brain), is also MIT. Neither
